@@ -96,7 +96,6 @@ def objective(trial):
     eval_cb = EvalCallback(
         eval_env,
         best_model_save_path=f"optuna_dqn_trials/trial_{trial.number}",
-        best_model_name="best_model",
         eval_freq=5000,
         deterministic=True,
         render=False,
