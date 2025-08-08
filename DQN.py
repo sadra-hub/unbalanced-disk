@@ -54,7 +54,7 @@ class DQN_UnbalancedDisk(UnbalancedDisk):
 
     def step(self, action):
         u = float(self.actions[action])
-        obs, terminated, truncated, info = super().step(u)
+        obs, reward, terminated, truncated, info = super().step(u)
 
         th, omega = float(obs[0]), float(obs[1])
         reward = self._reward(th, omega, u)
