@@ -109,7 +109,7 @@ def objective(trial):
         exploration_fraction=exploration_fraction,
         exploration_final_eps=exploration_final_eps,
         target_update_interval=target_update,
-        discount_factor=gamma,
+        gamma=gamma,
         batch_size=batch_size,
         policy_kwargs=policy_kwargs,
         verbose=1,
