@@ -62,7 +62,11 @@ class DQN_UnbalancedDisk(UnbalancedDisk):
         return obs, reward, terminated, truncated, info
 
     def reset(self, seed=None, options=None):
-        obs, info = super().reset(seed=seed, options=options)
+        # Handle both Gymnasium-style (with options) and older style (no options)
+        try:
+            obs, info = super().reset(seed=seed, options=options)
+        except TypeError:
+            obs, info = super().reset(seed=seed)  # fallback for old API
         return obs, info
 
 
