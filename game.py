@@ -182,7 +182,7 @@ class HumanDiskSim:
                         if steps >= max_steps:
                             break
 
-                self.env.render()
+                # self.env.render()
                 self.draw_overlay()
         finally:
             self.env.close()

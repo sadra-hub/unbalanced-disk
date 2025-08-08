@@ -135,7 +135,7 @@ obs, _ = env.reset()
 for _ in range(5000):
     action, _states = model.predict(obs)
     obs, reward, terminated, truncated, info = env.step(action)
-    env.render()
+    # env.render()
     theta = (obs[0] + np.pi) % (2 * np.pi) - np.pi
     print(f"theta = {theta: .4f}, omega: {obs[1]: .4f}, action: {action[0]: .4f}")
     if terminated or truncated:
