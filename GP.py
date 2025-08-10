@@ -1,100 +1,100 @@
-# GP_torch.py
-# PyTorch + GPyTorch SVGP (Sparse Variational GP) for NARX modeling.
-# - Grid search over (na, nb, inducing M) with clear RMSE logs per iteration
-# - Final training with best (by simulation RMSE) config
-# - Evaluates on hidden prediction & hidden simulation files (if GT present)
-# - Saves model as .pth and writes hidden-test submission .npz
+# GP_torch.py  — SVGP NARX with sin/cos features, wrapped RMSE, ARD RBF, X-normalization
 
 import os, math, numpy as np, torch
 from torch.utils.data import DataLoader, TensorDataset
 import gpytorch
 
 # =========================
-# Utilities
+# Utils
 # =========================
-def to_tensor(x, device):
-    return torch.as_tensor(x, dtype=torch.float32, device=device)
+def to_tensor(x, device): return torch.as_tensor(x, dtype=torch.float32, device=device)
 
 def rmse(a, b):
-    a = np.asarray(a).reshape(-1)
-    b = np.asarray(b).reshape(-1)
-    return math.sqrt(np.mean((a - b) ** 2))
+    a = np.asarray(a).reshape(-1); b = np.asarray(b).reshape(-1)
+    return float(np.sqrt(np.mean((a - b) ** 2)))
 
-def construct_io_dataset(u_data, y_data, na, nb):
-    inputs, targets = [], []
+def wrap_angle(a): return (np.asarray(a) + np.pi) % (2*np.pi) - np.pi
+def rmse_wrap(a, b):
+    e = wrap_angle(a) - wrap_angle(b)
+    return float(np.sqrt(np.mean(wrap_angle(e) ** 2)))
+
+def construct_io_dataset(u, th, na, nb):
+    s, c = np.sin(th).astype(np.float32), np.cos(th).astype(np.float32)
+    X, y = [], []
     start = max(na, nb)
-    for k in range(start, len(y_data)):
-        io_vec = np.concatenate([u_data[k - nb:k], y_data[k - na:k]])
-        inputs.append(io_vec)
-        targets.append(y_data[k])
-    X = np.array(inputs, dtype=np.float32)
-    y = np.array(targets, dtype=np.float32)
-    return X, y
+    for k in range(start, len(th)):
+        X.append(np.concatenate([u[k-nb:k], s[k-na:k], c[k-na:k]], axis=0))
+        y.append(th[k])
+    return np.array(X, np.float32), np.array(y, np.float32)
 
-def simulate_narx_model(u_sequence, y_initial, gp_model, likelihood, na, nb, device):
+def standardize_X(X, mu=None, sig=None):
+    if mu is None:
+        mu = X.mean(0)
+        sig = X.std(0) + 1e-12
+    return (X - mu) / sig, mu, sig
+
+def simulate_narx_model(u_sequence, y_initial, gp_model, likelihood, na, nb, device, x_mu, x_sig):
     """
-    Closed-loop (free-run) simulation:
-    - uses first 50 y samples as warm-up (like original)
-    - evolves with predicted y
+    Free-run sim with sin/cos features, 50-sample warmup.
     """
     with torch.no_grad(), gpytorch.settings.fast_pred_var():
         y_initial = np.asarray(y_initial, dtype=np.float32)
         u_sequence = np.asarray(u_sequence, dtype=np.float32)
 
-        y_simulated = list(y_initial[:50].copy())
-        past_u = list(u_sequence[50 - nb:50].copy())
-        past_y = y_simulated[-na:].copy()
+        y_sim = list(y_initial[:50].copy())
+        upast = list(u_sequence[50 - nb:50].copy())
+        ypast = y_sim[-na:].copy()
 
-        for u_current in u_sequence[50:]:
-            x = np.concatenate([past_u, past_y])[None, :]
+        for u_now in u_sequence[50:]:
+            sin_blk = np.sin(np.array(ypast[-na:], dtype=np.float32))
+            cos_blk = np.cos(np.array(ypast[-na:], dtype=np.float32))
+            x = np.concatenate([np.array(upast[-nb:], dtype=np.float32), sin_blk, cos_blk])[None, :]
+            x = (x - x_mu) / x_sig
             x_t = to_tensor(x, device)
             pred = likelihood(gp_model(x_t))
             mean = pred.mean.item()
 
-            past_u.append(float(u_current)); past_u.pop(0)
-            past_y.append(mean); past_y.pop(0)
-            y_simulated.append(mean)
+            upast.append(float(u_now)); upast.pop(0)
+            ypast.append(mean);         ypast.pop(0)
+            y_sim.append(mean)
 
-    return np.array(y_simulated, dtype=np.float32)
+    return np.array(y_sim, dtype=np.float32)
 
 # =========================
-# SVGP Model
+# SVGP model
 # =========================
 class NARXSVGP(gpytorch.models.ApproximateGP):
-    def __init__(self, inducing_points):
-        variational_dist = gpytorch.variational.CholeskyVariationalDistribution(inducing_points.size(0))
-        variational_strategy = gpytorch.variational.VariationalStrategy(
-            self, inducing_points, variational_dist, learn_inducing_locations=True
+    def __init__(self, inducing_points, input_dim):
+        q = gpytorch.variational.CholeskyVariationalDistribution(inducing_points.size(0))
+        strat = gpytorch.variational.VariationalStrategy(
+            self, inducing_points, q, learn_inducing_locations=True
         )
-        super().__init__(variational_strategy)
+        super().__init__(strat)
         self.mean_module = gpytorch.means.ConstantMean()
+        # ARD RBF over all dims
         self.covar_module = gpytorch.kernels.ScaleKernel(
-            gpytorch.kernels.RBFKernel()
+            gpytorch.kernels.RBFKernel(ard_num_dims=input_dim)
         )
 
     def forward(self, x):
-        mean_x = self.mean_module(x)
-        covar_x = self.covar_module(x)
-        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+        return gpytorch.distributions.MultivariateNormal(
+            self.mean_module(x), self.covar_module(x)
+        )
 
 def train_svgp(model, likelihood, train_loader, epochs=60, lr=0.01, device="cpu"):
     model.train(); likelihood.train()
-    optimizer = torch.optim.Adam(
+    opt = torch.optim.Adam(
         [{"params": model.parameters()}, {"params": likelihood.parameters()}],
         lr=lr
     )
     mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=len(train_loader.dataset))
     for ep in range(epochs):
-        total = 0.0
         for xb, yb in train_loader:
-            optimizer.zero_grad()
+            opt.zero_grad()
             out = model(xb)
             loss = -mll(out, yb)
             loss.backward()
-            optimizer.step()
-            total += loss.item() * xb.size(0)
-        # Uncomment for per-epoch loss:
-        # print(f"  Epoch {ep+1:03d}/{epochs} | ELBO {-total/len(train_loader.dataset):.4f}")
+            opt.step()
     return model, likelihood
 
 @torch.no_grad()
@@ -107,12 +107,20 @@ def predict_svgp(model, likelihood, X, device="cpu", batch_size=4096):
         means.append(pred.mean.detach().cpu())
     return torch.cat(means, dim=0).numpy()
 
-# Helpers to robustly fetch keys from hidden files
 def get_first_key(dct, candidates):
     for k in candidates:
-        if k in dct:
-            return k
+        if k in dct: return k
     return None
+
+def maybe_kmeans_Z(X, M, device, seed=0):
+    try:
+        from sklearn.cluster import KMeans
+        kmeans = KMeans(n_clusters=M, n_init=10, random_state=seed).fit(X)
+        Z = torch.tensor(kmeans.cluster_centers_, dtype=torch.float32, device=device)
+    except Exception:
+        perm = torch.randperm(X.shape[0], device=device)[:M]
+        Z = torch.tensor(X[perm.cpu().numpy()], dtype=torch.float32, device=device)
+    return Z
 
 # =========================
 # Main
@@ -122,203 +130,182 @@ def main():
     os.makedirs("models", exist_ok=True)
     os.makedirs("disc-submission-files", exist_ok=True)
 
-    # Load data
-    npz_data = np.load('disc-benchmark-files/training-val-test-data.npz')
-    th_all = npz_data['th'].astype(np.float32)
-    u_all  = npz_data['u'].astype(np.float32)
+    # Load
+    data = np.load('disc-benchmark-files/training-val-test-data.npz')
+    th_all = data['th'].astype(np.float32)
+    u_all  = data['u'].astype(np.float32)
 
     N = len(th_all)
-    train_split = int(0.8 * N)
-    valid_split = int(0.9 * N)
+    i_tr = int(0.8*N); i_va = int(0.9*N)
+    th_tr, th_va, th_te = th_all[:i_tr], th_all[i_tr:i_va], th_all[i_va:]
+    u_tr,  u_va,  u_te  = u_all[:i_tr],  u_all[i_tr:i_va],  u_all[i_va:]
 
-    th_train, th_valid, th_test = th_all[:train_split], th_all[train_split:valid_split], th_all[valid_split:]
-    u_train,  u_valid,  u_test  = u_all[:train_split],  u_all[train_split:valid_split],  u_all[valid_split:]
-
-    # Hyperparameter grids
-    na_nb_candidates = [2, 5, 8]
-    inducing_point_counts = [300, 100, 50]
+    # Grids
+    na_grid = [2, 5, 8]
+    nb_grid = [2, 5, 8]
+    M_grid  = [300, 100, 50]
 
     best_pred = {"rmse": float("inf")}
     best_sim  = {"rmse": float("inf")}
 
     print("\n=== Starting Grid Search over (na, nb, M) ===")
-    for num_inducing in inducing_point_counts:
-        for na in na_nb_candidates:
-            for nb in na_nb_candidates:
-                # Build datasets
-                Xtr, ytr = construct_io_dataset(u_train, th_train, na, nb)
-                Xva, yva = construct_io_dataset(u_valid, th_valid, na, nb)
-
+    for M in M_grid:
+        for na in na_grid:
+            for nb in nb_grid:
+                # Datasets (sin/cos)
+                Xtr, ytr = construct_io_dataset(u_tr, th_tr, na, nb)
+                Xva, yva = construct_io_dataset(u_va, th_va, na, nb)
                 if len(Xtr) < 100 or len(Xva) < 100:
-                    print(f"⚠ Skipping na={na}, nb={nb}, M={num_inducing} (insufficient samples)")
-                    continue
+                    print(f"⚠ Skip na={na}, nb={nb}, M={M} — not enough samples"); continue
 
-                # Tensors + loader
-                Xtr_t = to_tensor(Xtr, device)
+                # Standardize X
+                Xtr_n, x_mu, x_sig = standardize_X(Xtr)
+                Xva_n, _, _        = standardize_X(Xva, x_mu, x_sig)
+
+                Xtr_t = to_tensor(Xtr_n, device)
                 ytr_t = to_tensor(ytr, device)
                 train_loader = DataLoader(TensorDataset(Xtr_t, ytr_t), batch_size=2048, shuffle=True)
 
-                # Inducing points from training inputs (stable init)
-                perm = torch.randperm(Xtr_t.size(0), device=device)[:num_inducing]
-                Z = Xtr_t[perm].clone().detach()
+                # Inducing points
+                Z = maybe_kmeans_Z(Xtr_n, M, device, seed=0)
 
-                model = NARXSVGP(Z).to(device)
+                model = NARXSVGP(Z, input_dim=Xtr_n.shape[1]).to(device)
                 likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
 
                 # Train
                 train_svgp(model, likelihood, train_loader, epochs=60, lr=0.01, device=device)
 
-                # Prediction RMSE (validation)
-                Xva_t = to_tensor(Xva, device)
-                yva_hat = predict_svgp(model, likelihood, Xva_t, device=device)
-                pred_rmse = rmse(yva_hat, yva)
+                # One-step val (pred) — X normalized
+                yva_hat = predict_svgp(model, likelihood, to_tensor(Xva_n, device), device=device)
+                pred_rmse = rmse_wrap(yva_hat, yva)  # wrapped makes more sense for angles
 
-                # Simulation RMSE (validation)
-                sim_valid = simulate_narx_model(list(u_valid), list(th_valid), model, likelihood, na, nb, device)
-                sim_rmse = rmse(sim_valid, th_valid)
+                # Free-run val (sim) — build features on the fly + normalize with train stats
+                sim_va = simulate_narx_model(u_va, th_va, model, likelihood, na, nb, device, x_mu, x_sig)
+                sim_rmse = rmse_wrap(sim_va, th_va)
 
-                # Log this config
-                print(
-                    f"[Grid] M={num_inducing:4d}, na={na:2d}, nb={nb:2d} "
-                    f"| Pred RMSE={pred_rmse:.4f} | Sim RMSE={sim_rmse:.4f} "
-                    f"| BestPred={best_pred['rmse']:.4f} | BestSim={best_sim['rmse']:.4f}"
-                )
+                print(f"[Grid] M={M:4d}, na={na:2d}, nb={nb:2d} | Pred RMSE={pred_rmse:.4f} | Sim RMSE={sim_rmse:.4f} "
+                      f"| BestPred={best_pred['rmse']:.4f} | BestSim={best_sim['rmse']:.4f}")
 
-                # Update bests
                 if pred_rmse < best_pred["rmse"]:
-                    best_pred = {"rmse": pred_rmse, "na": na, "nb": nb, "M": num_inducing}
+                    best_pred = {"rmse": pred_rmse, "na": na, "nb": nb, "M": M, "x_mu": x_mu, "x_sig": x_sig}
                 if sim_rmse < best_sim["rmse"]:
-                    best_sim  = {"rmse": sim_rmse,  "na": na, "nb": nb, "M": num_inducing}
+                    best_sim  = {"rmse": sim_rmse,  "na": na, "nb": nb, "M": M, "x_mu": x_mu, "x_sig": x_sig}
 
-    print("\n=== Best by Prediction ===", best_pred)
-    print("=== Best by Simulation ===", best_sim)
+    print("\n=== Best by Prediction ===", {k: v for k, v in best_pred.items() if k != "x_mu" and k != "x_sig"})
+    print("=== Best by Simulation ===", {k: v for k, v in best_sim.items()  if k != "x_mu" and k != "x_sig"})
 
-    # Choose final config (by simulation best; change to best_pred if you prefer)
-    na = best_sim.get("na", 8)
-    nb = best_sim.get("nb", 2)
-    inducing = best_sim.get("M", 100)
+    # Final config (by Sim best)
+    na = best_sim.get("na", 8); nb = best_sim.get("nb", 2); M = best_sim.get("M", 100)
 
-    # Final train on train split (you can merge train+valid if you want)
-    Xtr, ytr = construct_io_dataset(u_train, th_train, na, nb)
-    Xva, yva = construct_io_dataset(u_valid, th_valid, na, nb)
-    Xte, yte = construct_io_dataset(u_test,  th_test,  na, nb)
+    # Build final datasets + standardize with train stats
+    Xtr, ytr = construct_io_dataset(u_tr, th_tr, na, nb)
+    Xva, yva = construct_io_dataset(u_va, th_va, na, nb)
+    Xte, yte = construct_io_dataset(u_te, th_te, na, nb)
+    Xtr_n, x_mu, x_sig = standardize_X(Xtr)
+    Xva_n, _, _ = standardize_X(Xva, x_mu, x_sig)
+    Xte_n, _, _ = standardize_X(Xte, x_mu, x_sig)
 
-    Xtr_t = to_tensor(Xtr, device)
-    ytr_t = to_tensor(ytr, device)
+    Xtr_t = to_tensor(Xtr_n, device); ytr_t = to_tensor(ytr, device)
     train_loader = DataLoader(TensorDataset(Xtr_t, ytr_t), batch_size=4096, shuffle=True)
 
-    perm = torch.randperm(Xtr_t.size(0), device=device)[:inducing]
-    Z = Xtr_t[perm].clone().detach()
-
-    model = NARXSVGP(Z).to(device)
+    Z = maybe_kmeans_Z(Xtr_n, M, device, seed=0)
+    model = NARXSVGP(Z, input_dim=Xtr_n.shape[1]).to(device)
     likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
     train_svgp(model, likelihood, train_loader, epochs=120, lr=0.01, device=device)
 
-    # Validation metrics
-    yva_hat = predict_svgp(model, likelihood, to_tensor(Xva, device), device=device)
-    rmse_valid_pred = rmse(yva_hat, yva)
-    sim_valid = simulate_narx_model(list(u_valid), list(th_valid), model, likelihood, na, nb, device)
-    rmse_valid_sim = rmse(sim_valid, th_valid)
-    print(f"\nValidation Prediction RMSE: {rmse_valid_pred:.4f}")
-    print(f"Validation Simulation RMSE: {rmse_valid_sim:.4f}")
+    # Validation
+    yva_hat = predict_svgp(model, likelihood, to_tensor(Xva_n, device), device=device)
+    rmse_valid_pred = rmse_wrap(yva_hat, yva)
+    sim_valid = simulate_narx_model(u_va, th_va, model, likelihood, na, nb, device, x_mu, x_sig)
+    rmse_valid_sim = rmse_wrap(sim_valid, th_va)
+    print(f"\nValidation Prediction RMSE (wrap): {rmse_valid_pred:.4f}")
+    print(f"Validation Simulation RMSE (wrap): {rmse_valid_sim:.4f}")
 
-    # Test metrics
-    yte_hat = predict_svgp(model, likelihood, to_tensor(Xte, device), device=device)
-    rmse_test_pred = rmse(yte_hat, yte)
-    sim_test = simulate_narx_model(list(u_test), list(th_test), model, likelihood, na, nb, device)
-    rmse_test_sim = rmse(sim_test, th_test)
-    print(f"Test Prediction RMSE: {rmse_test_pred:.4f}")
-    print(f"Test Simulation RMSE: {rmse_test_sim:.4f}")
+    # Test
+    yte_hat = predict_svgp(model, likelihood, to_tensor(Xte_n, device), device=device)
+    rmse_test_pred = rmse_wrap(yte_hat, yte)
+    sim_test = simulate_narx_model(u_te, th_te, model, likelihood, na, nb, device, x_mu, x_sig)
+    rmse_test_sim = rmse_wrap(sim_test, th_te)
+    print(f"Test Prediction RMSE (wrap): {rmse_test_pred:.4f}")
+    print(f"Test Simulation RMSE (wrap): {rmse_test_sim:.4f}")
 
     # =========================
-    # Hidden-set EVALUATION
+    # Hidden-set evaluation
     # =========================
-
-    # ---- Hidden Prediction (point-wise) ----
     pred_hidden_path = 'disc-benchmark-files/hidden-test-prediction-submission-file.npz'
     if os.path.exists(pred_hidden_path):
-        hidden_pred = np.load(pred_hidden_path)
-        # Required inputs
-        upast = hidden_pred['upast']
-        thpast = hidden_pred['thpast']
-        X_hidden = np.concatenate([upast[:, 15 - nb:], thpast[:, 15 - na:]], axis=1).astype(np.float32)
-        y_hidden_pred = predict_svgp(model, likelihood, to_tensor(X_hidden, device), device=device).reshape(-1, 1)
+        hid = np.load(pred_hidden_path)
+        upast = hid['upast'].astype(np.float32)
+        thpast = hid['thpast'].astype(np.float32)
+        u_blk = upast[:, -nb:] if nb > 0 else np.zeros((upast.shape[0], 0), np.float32)
+        s_blk = np.sin(thpast[:, -na:]) if na > 0 else np.zeros((upast.shape[0], 0), np.float32)
+        c_blk = np.cos(thpast[:, -na:]) if na > 0 else np.zeros((upast.shape[0], 0), np.float32)
+        X_hidden = np.concatenate([u_blk, s_blk, c_blk], axis=1).astype(np.float32)
+        X_hidden_n, _, _ = standardize_X(X_hidden, x_mu, x_sig)
+        y_hidden_pred = predict_svgp(model, likelihood, to_tensor(X_hidden_n, device), device=device).reshape(-1, 1)
 
-        # Try to find ground-truth key if provided
-        gt_key = get_first_key(hidden_pred, ['thnow_true', 'thnow', 'y_true', 'y', 'target'])
+        gt_key = get_first_key(hid, ['thnow_true', 'thnow', 'y_true', 'y', 'target'])
         if gt_key is not None:
-            gt = hidden_pred[gt_key].astype(np.float32).reshape(-1, 1)
+            gt = hid[gt_key].astype(np.float32).reshape(-1, 1)
             if gt.shape[0] == y_hidden_pred.shape[0]:
-                rmse_hidden_pred = rmse(y_hidden_pred, gt)
-                print(f"Hidden Prediction RMSE ({gt_key}): {rmse_hidden_pred:.4f}")
+                rmse_hidden_pred = rmse_wrap(y_hidden_pred, gt)
+                print(f"Hidden Prediction RMSE (wrap, {gt_key}): {rmse_hidden_pred:.4f}")
             else:
-                print(f"Hidden Prediction: GT length {gt.shape[0]} != pred length {y_hidden_pred.shape[0]} (skip RMSE)")
+                print(f"Hidden Prediction: GT len {gt.shape[0]} != pred len {y_hidden_pred.shape[0]} (skip RMSE)")
         else:
-            print("Hidden Prediction: no ground-truth key found (thnow_true/thnow/y_true/y/target). Skipping RMSE.")
+            print("Hidden Prediction: no GT key found; skipping RMSE.")
 
-        # Also write submission file
-        np.savez(
-            'disc-submission-files/sparse-gp-hidden-test-prediction-submission-file.npz',
-            upast=upast, thpast=thpast, thnow=y_hidden_pred
-        )
+        np.savez('disc-submission-files/sparse-gp-hidden-test-prediction-submission-file.npz',
+                 upast=upast, thpast=thpast, thnow=y_hidden_pred)
         print("Wrote hidden prediction submission npz.")
     else:
         print(f"Hidden prediction file not found at {pred_hidden_path} — skipping.")
 
-    # ---- Hidden Simulation (free-run sequence) ----
     sim_hidden_path = 'disc-benchmark-files/hidden-test-simulation-submission-file.npz'
     if os.path.exists(sim_hidden_path):
-        hidden_sim = np.load(sim_hidden_path)
-
-        # Try to extract keys robustly
-        u_key  = get_first_key(hidden_sim, ['u', 'u_sequence', 'u_valid', 'u_test'])
-        th_key = get_first_key(hidden_sim, ['th_true', 'th', 'y_true', 'y'])
-        th0_key = get_first_key(hidden_sim, ['th_initial', 'y_initial', 'th0'])
-
+        hid = np.load(sim_hidden_path)
+        u_key  = get_first_key(hid, ['u','u_sequence','u_valid','u_test'])
+        th_key = get_first_key(hid, ['th_true','th','y_true','y'])
+        th0_key = get_first_key(hid, ['th_initial','y_initial','th0'])
         if u_key is None:
-            print("Hidden Simulation: no input sequence key found (u/u_sequence/...). Skipping.")
+            print("Hidden Simulation: no input key (u*). Skipping.")
         else:
-            u_seq = hidden_sim[u_key].astype(np.float32)
-
-            # Warmup initial y: prefer explicit th_initial; else use first 50 of provided th_true if available
+            u_seq = hid[u_key].astype(np.float32)
             if th0_key is not None:
-                th_init = hidden_sim[th0_key].astype(np.float32)
+                th_init = hid[th0_key].astype(np.float32)
             elif th_key is not None:
-                th_init = hidden_sim[th_key].astype(np.float32)[:50]
+                th_init = hid[th_key].astype(np.float32)[:50]
             else:
-                # last resort: zeros warmup
-                th_init = np.zeros(50, dtype=np.float32)
-                print("Hidden Simulation: no th_initial/th_true provided; using zeros for warmup 50 samples.")
+                th_init = np.zeros(50, np.float32)
+                print("Hidden Simulation: no th_initial/th; using zeros warmup 50.")
 
-            sim_hidden = simulate_narx_model(list(u_seq), list(th_init), model, likelihood, na, nb, device)
+            sim_hidden = simulate_narx_model(u_seq, th_init, model, likelihood, na, nb, device, x_mu, x_sig)
 
-            # If GT full sequence exists and lengths match, compute RMSE
             if th_key is not None:
-                th_true = hidden_sim[th_key].astype(np.float32)
+                th_true = hid[th_key].astype(np.float32)
                 if len(sim_hidden) == len(th_true):
-                    rmse_hidden_sim = rmse(sim_hidden, th_true)
-                    print(f"Hidden Simulation RMSE ({th_key}): {rmse_hidden_sim:.4f}")
+                    rmse_hidden_sim = rmse_wrap(sim_hidden, th_true)
+                    print(f"Hidden Simulation RMSE (wrap, {th_key}): {rmse_hidden_sim:.4f}")
                 else:
-                    print(f"Hidden Simulation: GT length {len(th_true)} != sim length {len(sim_hidden)} (skip RMSE)")
+                    print(f"Hidden Simulation: GT len {len(th_true)} != sim len {len(sim_hidden)} (skip RMSE)")
             else:
-                print("Hidden Simulation: no ground-truth key (th_true/th) found. Skipping RMSE.")
+                print("Hidden Simulation: no GT key; skipping RMSE.")
 
-            # Save simulation submission
             np.savez('disc-submission-files/sparse-gp-hidden-test-simulation-submission-file.npz',
                      th=sim_hidden)
             print("Wrote hidden simulation submission npz.")
     else:
         print(f"Hidden simulation file not found at {sim_hidden_path} — skipping.")
 
-    # Save PyTorch model (.pth)
+    # Save model + normalization + config
     save_path = 'disc-submission-files/gp_narx_svgp.pth'
     torch.save({
         "state_dict": model.state_dict(),
         "likelihood_state_dict": likelihood.state_dict(),
-        "na": na,
-        "nb": nb,
+        "na": na, "nb": nb, "M": M,
+        "x_mu": x_mu, "x_sig": x_sig,
         "inducing_points": model.variational_strategy.inducing_points.detach().cpu(),
-        "input_dim": Xtr.shape[1],
+        "input_dim": Xtr_n.shape[1],
     }, save_path)
     print(f"Saved model to {save_path}")
 
