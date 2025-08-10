@@ -220,7 +220,7 @@ print("\n=== Training Improved NARX Models ===")
 
 def train_model_with_early_stopping(model, train_loader, val_data, epochs=500, patience=50):
     optimizer = optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.7, patience=20)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.7, patience=20, verbose=False)
     
     X_val_t, y_val_theta, x_mu, x_sig = val_data
     best_val_loss = float('inf')

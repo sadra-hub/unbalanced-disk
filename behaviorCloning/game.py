@@ -42,7 +42,7 @@ class HumanDiskSim:
         self.u = 0.0
         self.running = True
         self.paused = False
-        self.auto_zero = True  # if True, slowly returns u->0 when no key pressed
+        self.auto_zero = False  # if True, slowly returns u->0 when no key pressed
 
         # logging
         self.session_id = now_str()
@@ -137,7 +137,7 @@ class HumanDiskSim:
 
         pygame.display.flip()
 
-    def log_step(self, t, obs, u, reward):
+    def log_step(self, t, obs, u):
         th = float(obs[0])
         omega = float(obs[1])
         self.log.append(
@@ -146,7 +146,6 @@ class HumanDiskSim:
                 "theta": th,
                 "omega": omega,
                 "u": float(u),
-                "reward": float(reward),
             }
         )
 
@@ -154,7 +153,7 @@ class HumanDiskSim:
         if not self.log:
             return
         with open(self.log_path_csv, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=["t", "theta", "omega", "u", "reward"])
+            w = csv.DictWriter(f, fieldnames=["t", "theta", "omega", "u"])
             w.writeheader()
             w.writerows(self.log)
         arr = {k: np.array([row[k] for row in self.log]) for k in self.log[0].keys()}
@@ -170,9 +169,9 @@ class HumanDiskSim:
                 self.handle_events()
 
                 if not self.paused:
-                    self.obs, reward, terminated, truncated, _ = self.env.step(self.u)
+                    self.obs, terminated, truncated, _ = self.env.step(self.u)
                     t += self.dt
-                    self.log_step(t, self.obs, self.u, reward)
+                    self.log_step(t, self.obs, self.u)
                     if terminated or truncated:
                         self.obs, _ = self.env.reset()
                         self.u = 0.0
@@ -182,7 +181,7 @@ class HumanDiskSim:
                         if steps >= max_steps:
                             break
 
-                # self.env.render()
+                self.env.render()
                 self.draw_overlay()
         finally:
             self.env.close()
