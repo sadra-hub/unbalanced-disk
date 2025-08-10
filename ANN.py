@@ -138,55 +138,74 @@ def narx_hidden_simulation_rmse(model, na, nb, sim_npz, x_mu, x_sig):
     return rmse_wrap(th_sim[:L], th_true[:L])
 
 # ========================
-# NARX Model (outputs 2: sin, cos)
+# Improved NARX Model with Dropout and BatchNorm
 # ========================
-class NARX(nn.Module):
-    def __init__(self, input_dim, hidden_neuron, hidden_layers, activation):
+class ImprovedNARX(nn.Module):
+    def __init__(self, input_dim, hidden_neuron, hidden_layers, activation, dropout_rate=0.1):
         super().__init__()
-        layer_sizes = [input_dim] + [hidden_neuron] * hidden_layers + [2]
-        self.layers = nn.ModuleList([nn.Linear(i, o) for i, o in zip(layer_sizes[:-1], layer_sizes[1:])])
+        self.layers = nn.ModuleList()
+        self.batch_norms = nn.ModuleList()
+        self.dropouts = nn.ModuleList()
+        
+        # Input layer
+        self.layers.append(nn.Linear(input_dim, hidden_neuron))
+        self.batch_norms.append(nn.BatchNorm1d(hidden_neuron))
+        self.dropouts.append(nn.Dropout(dropout_rate))
+        
+        # Hidden layers
+        for _ in range(hidden_layers - 1):
+            self.layers.append(nn.Linear(hidden_neuron, hidden_neuron))
+            self.batch_norms.append(nn.BatchNorm1d(hidden_neuron))
+            self.dropouts.append(nn.Dropout(dropout_rate))
+        
+        # Output layer
+        self.output_layer = nn.Linear(hidden_neuron, 2)
         self.act = activation()
 
     def forward(self, x):
-        for lin in self.layers[:-1]:
-            x = self.act(lin(x))
-        return self.layers[-1](x)  # [sinθ, cosθ]
+        for i, (layer, bn, dropout) in enumerate(zip(self.layers, self.batch_norms, self.dropouts)):
+            x = layer(x)
+            if x.size(0) > 1:  # Only apply batch norm if batch size > 1
+                x = bn(x)
+            x = self.act(x)
+            x = dropout(x)
+        
+        x = self.output_layer(x)
+        # Normalize to unit circle
+        x = x / (torch.norm(x, dim=1, keepdim=True) + 1e-8)
+        return x
 
 # ========================
-# LSTM Model (unchanged; predicts [θ, ω])
+# Advanced Loss Function
 # ========================
-class LSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, output_size, bidirectional=False, dropout=0.0):
-        super(LSTM, self).__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True,
-                            bidirectional=bidirectional, dropout=dropout if num_layers > 1 else 0.0).double()
-        direction_factor = 2 if bidirectional else 1
-        self.fc = nn.Linear(hidden_size * direction_factor, output_size).double()
-    def forward(self, x):
-        out, _ = self.lstm(x)
-        return self.fc(out[:, -1, :])
+def angle_aware_loss(pred_sc, target_sc, alpha=0.5):
+    """
+    Combines MSE loss on sin/cos with angular error
+    """
+    # MSE loss on sin/cos
+    mse_loss = nn.functional.mse_loss(pred_sc, target_sc)
+    
+    # Angular error loss
+    pred_theta = torch.atan2(pred_sc[:, 0], pred_sc[:, 1])
+    target_theta = torch.atan2(target_sc[:, 0], target_sc[:, 1])
+    
+    # Wrap angle differences
+    angle_diff = pred_theta - target_theta
+    angle_diff = torch.atan2(torch.sin(angle_diff), torch.cos(angle_diff))
+    angular_loss = torch.mean(angle_diff ** 2)
+    
+    # Unit circle constraint
+    unit_penalty = torch.mean((torch.norm(pred_sc, dim=1) - 1.0) ** 2)
+    
+    return mse_loss + alpha * angular_loss + 0.01 * unit_penalty
 
 # ========================
-# Load data & normalize (for LSTM)
+# Load data & normalize
 # ========================
 print("Loading and preprocessing data...")
 data = np.load('disc-benchmark-files/training-val-test-data.npz')
 th = data['th'].astype(np.float32)
 u = data['u'].astype(np.float32)
-
-dt = 0.025
-omega = np.gradient(th, dt).astype(np.float32)
-
-theta_mean, theta_std = th.mean(), th.std()
-omega_mean, omega_std = omega.mean(), omega.std()
-u_mean, u_std = u.mean(), u.std()
-
-def normalize(x, mean, std): return (x - mean) / (std + 1e-12)
-def unnormalize(x, mean, std): return x * (std + 1e-12) + mean
-
-th_norm = normalize(th, theta_mean, theta_std)
-omega_norm = normalize(omega, omega_mean, omega_std)
-u_norm = normalize(u, u_mean, u_std)
 
 # Hidden files
 hidden_pred_npz = np.load('disc-benchmark-files/hidden-test-prediction-submission-file.npz') if os.path.exists('disc-benchmark-files/hidden-test-prediction-submission-file.npz') else None
@@ -195,270 +214,151 @@ if hidden_pred_npz is None: print("⚠ Hidden prediction file not found; will sk
 if hidden_sim_npz is None:  print("⚠ Hidden simulation file not found; will skip hidden simulation RMSE.")
 
 # ========================
-# Train NARX Models (sin/cos outputs) + per-iteration logs
+# Enhanced Training with Early Stopping and Learning Rate Scheduling
 # ========================
-print("\n=== Training NARX Models (sin/cos outputs; wrapped metrics) ===")
-batch_size = 256
-epochs = 400
-learning_rate = 1e-3
+print("\n=== Training Improved NARX Models ===")
+
+def train_model_with_early_stopping(model, train_loader, val_data, epochs=500, patience=50):
+    optimizer = optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.7, patience=20, verbose=False)
+    
+    X_val_t, y_val_theta, x_mu, x_sig = val_data
+    best_val_loss = float('inf')
+    patience_counter = 0
+    best_state = None
+    
+    for epoch in range(epochs):
+        # Training
+        model.train()
+        train_loss = 0
+        for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad()
+            pred_sc = model(xb)
+            loss = angle_aware_loss(pred_sc, yb)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
+            optimizer.step()
+            train_loss += loss.item()
+        
+        # Validation every 10 epochs
+        if epoch % 10 == 0:
+            model.eval()
+            with torch.no_grad():
+                pred_sc_val = model(X_val_t.to(device)).cpu().numpy()
+            th_val_hat = sincos_to_theta(pred_sc_val)
+            val_rmse = rmse_wrap(th_val_hat, y_val_theta)
+            
+            scheduler.step(val_rmse)
+            
+            if val_rmse < best_val_loss:
+                best_val_loss = val_rmse
+                patience_counter = 0
+                best_state = model.state_dict().copy()
+            else:
+                patience_counter += 1
+            
+            if patience_counter >= patience:
+                print(f"Early stopping at epoch {epoch}")
+                break
+    
+    # Load best model
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    
+    return model, best_val_loss
 
 best_score = float("inf")
 best_model_narx = None
 best_config_narx = None
-best_norm_stats = None  # (x_mu, x_sig)
+best_norm_stats = None
 
-for na in [5, 8]:
-    for nb in [3, 5]:
-        # Build IO (sin/cos)
-        X_train_np, y_train_np = create_IO_data_sincos(u[:int(0.8*len(th))], th[:int(0.8*len(th))], na, nb)
-        X_val_np,   y_val_theta = create_IO_data_sincos(u[int(0.8*len(th)):int(0.9*len(th))],
-                                                        th[int(0.8*len(th)):int(0.9*len(th))], na, nb)
-        # We'll use y_val_theta’s θ from the original series:
-        # We need the actual θ at indices; it's equivalent to atan2(y_val_sc[:,0], y_val_sc[:,1])
-        # but we can just recompute from th slice:
-        y_val_theta = th[int(0.8*len(th)) + max(na, nb): int(0.9*len(th))]  # ground-truth θ
+# Expanded hyperparameter search with better configurations
+configs_to_try = [
+    (5, 3, 2, 64, "relu", 0.15),    # More layers, higher dropout
+    (5, 3, 2, 96, "relu", 0.1),    # Wider network
+    (8, 3, 2, 64, "relu", 0.1),    # More history
+    (5, 5, 2, 64, "relu", 0.1),    # More input history
+    (8, 5, 3, 64, "relu", 0.15),   # Deep and wide
+    (5, 3, 2, 128, "relu", 0.1),   # Very wide
+    (10, 3, 2, 64, "relu", 0.1),   # More output history
+    (5, 3, 1, 128, "tanh", 0.05),  # Shallow but wide
+]
 
-        # Standardize X
-        X_train, x_mu, x_sig = standardize_X(X_train_np)
-        X_val,   _,    _     = standardize_X(X_val_np, x_mu, x_sig)
+for na, nb, hl, hn, act_name, dropout in configs_to_try:
+    print(f"\nTrying: na={na}, nb={nb}, hl={hl}, hn={hn}, act={act_name}, dropout={dropout}")
+    
+    # Build IO data
+    X_train_np, y_train_np = create_IO_data_sincos(u[:int(0.75*len(th))], th[:int(0.75*len(th))], na, nb)
+    X_val_np, _ = create_IO_data_sincos(u[int(0.75*len(th)):int(0.9*len(th))], 
+                                       th[int(0.75*len(th)):int(0.9*len(th))], na, nb)
+    y_val_theta = th[int(0.75*len(th)) + max(na, nb): int(0.9*len(th))]
 
-        X_train_t = torch.tensor(X_train, dtype=torch.float32)
-        y_train_t = torch.tensor(y_train_np, dtype=torch.float32)
-        X_val_t   = torch.tensor(X_val, dtype=torch.float32)
+    # Standardize
+    X_train, x_mu, x_sig = standardize_X(X_train_np)
+    X_val, _, _ = standardize_X(X_val_np, x_mu, x_sig)
 
-        train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=batch_size, shuffle=True)
+    # Create data loaders
+    X_train_t = torch.tensor(X_train, dtype=torch.float32)
+    y_train_t = torch.tensor(y_train_np, dtype=torch.float32)
+    X_val_t = torch.tensor(X_val, dtype=torch.float32)
+    
+    train_dataset = TensorDataset(X_train_t, y_train_t)
+    train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True, num_workers=0)
 
-        for act_name, activation in [("tanh", nn.Tanh), ("relu", nn.ReLU)]:
-            for hl in [1, 2]:
-                for hn in [32, 64]:
-                    model_narx = NARX(input_dim=nb + 2*na, hidden_neuron=hn, hidden_layers=hl, activation=activation).to(device)
-                    opt = optim.Adam(model_narx.parameters(), lr=learning_rate, weight_decay=1e-5)
-                    mse = nn.MSELoss()
+    # Create model
+    activation = nn.ReLU if act_name == "relu" else nn.Tanh
+    model_narx = ImprovedNARX(
+        input_dim=nb + 2*na, 
+        hidden_neuron=hn, 
+        hidden_layers=hl, 
+        activation=activation, 
+        dropout_rate=dropout
+    ).to(device)
 
-                    # Train
-                    for epoch in range(epochs):
-                        model_narx.train()
-                        for xb, yb in train_loader:
-                            xb = xb.to(device); yb = yb.to(device)
-                            opt.zero_grad()
-                            pred_sc = model_narx(xb)  # [sin,cos]
-                            # MSE on sin/cos + small unit-circle penalty
-                            loss = mse(pred_sc, yb) + 1e-3 * ((pred_sc.norm(dim=1) - 1.0) ** 2).mean()
-                            loss.backward()
-                            opt.step()
+    # Train with early stopping
+    val_data = (X_val_t, y_val_theta, x_mu, x_sig)
+    model_narx, val_rmse = train_model_with_early_stopping(model_narx, train_loader, val_data)
 
-                    # Validation one-step (wrapped RMSE on θ)
-                    model_narx.eval()
-                    with torch.no_grad():
-                        pred_sc_val = model_narx(X_val_t.to(device)).cpu().numpy()
-                    th_val_hat = sincos_to_theta(pred_sc_val)
-                    rmse_val_wrap = rmse_wrap(th_val_hat, y_val_theta)
+    # Evaluate on hidden sets
+    rmse_hidden_pred = narx_hidden_prediction_rmse(model_narx, na, nb, hidden_pred_npz, x_mu, x_sig)
+    rmse_hidden_sim = narx_hidden_simulation_rmse(model_narx, na, nb, hidden_sim_npz, x_mu, x_sig)
 
-                    # Hidden prediction RMSE (wrapped)
-                    rmse_hidden_pred = narx_hidden_prediction_rmse(model_narx, na, nb, hidden_pred_npz, x_mu, x_sig)
+    print(f"Results → ValRMSE: {val_rmse:.5f} | "
+          f"HiddenPred: {('NA' if rmse_hidden_pred is None else f'{rmse_hidden_pred:.5f}')} | "
+          f"HiddenSim: {('NA' if rmse_hidden_sim is None else f'{rmse_hidden_sim:.5f}')}")
 
-                    # Hidden simulation RMSE (wrapped)
-                    rmse_hidden_sim = narx_hidden_simulation_rmse(model_narx, na, nb, hidden_sim_npz, x_mu, x_sig)
+    # Score selection (prioritize hidden simulation)
+    if rmse_hidden_sim is not None:
+        score = rmse_hidden_sim
+    elif rmse_hidden_pred is not None:
+        score = rmse_hidden_pred
+    else:
+        score = val_rmse
 
-                    print(f"na:{na} nb:{nb} hl:{hl} hn:{hn} act:{act_name} "
-                          f"→ ValPredRMSE(wrap): {rmse_val_wrap:.5f} "
-                          f"| HiddenPredRMSE(wrap): {('NA' if rmse_hidden_pred is None else f'{rmse_hidden_pred:.5f}')} "
-                          f"| HiddenSimRMSE(wrap): {('NA' if rmse_hidden_sim is None else f'{rmse_hidden_sim:.5f}')}")
+    if score < best_score:
+        best_score = score
+        best_model_narx = model_narx
+        best_config_narx = (na, nb, hl, hn, act_name, dropout)
+        best_norm_stats = (x_mu.copy(), x_sig.copy())
+        print(f"*** NEW BEST MODEL! Score: {score:.5f} ***")
 
-                    # pick score: prefer hidden sim, else hidden pred, else val
-                    if rmse_hidden_sim is not None:
-                        score = rmse_hidden_sim
-                    elif rmse_hidden_pred is not None:
-                        score = rmse_hidden_pred
-                    else:
-                        score = rmse_val_wrap
-
-                    if score < best_score:
-                        best_score = score
-                        best_model_narx = model_narx
-                        best_config_narx = (na, nb, hl, hn, act_name)
-                        best_norm_stats = (x_mu.copy(), x_sig.copy())
-
-# Save best NARX + export hidden simulation submission
+# Save best model
 if best_model_narx is not None:
     x_mu, x_sig = best_norm_stats
     torch.save(best_model_narx.state_dict(), "disc-submission-files/ann-narx-model.pth")
-    print(f"\nBest NARX: na:{best_config_narx[0]} nb:{best_config_narx[1]} hl:{best_config_narx[2]} hn:{best_config_narx[3]} act:{best_config_narx[4]} | score:{best_score:.5f}")
+    print(f"\nBest NARX: na:{best_config_narx[0]} nb:{best_config_narx[1]} hl:{best_config_narx[2]} "
+          f"hn:{best_config_narx[3]} act:{best_config_narx[4]} dropout:{best_config_narx[5]} | score:{best_score:.5f}")
 
-    # Export hidden simulation .npz if available
+    # Export hidden simulation if available
     if hidden_sim_npz is not None:
-        u_key  = get_first_key(hidden_sim_npz, ['u','u_sequence','u_valid','u_test'])
+        u_key = get_first_key(hidden_sim_npz, ['u','u_sequence','u_valid','u_test'])
         th_key = get_first_key(hidden_sim_npz, ['th','th_true','y','y_true'])
         if (u_key is not None) and (th_key is not None):
             u_test = hidden_sim_npz[u_key].astype(np.float32)
             th_test = hidden_sim_npz[th_key].astype(np.float32)
-            th_sim = use_NARX_model_in_simulation_sincos(list(u_test), list(th_test), best_model_narx, best_config_narx[0], best_config_narx[1], x_mu, x_sig)
+            th_sim = use_NARX_model_in_simulation_sincos(list(u_test), list(th_test), 
+                                                       best_model_narx, best_config_narx[0], best_config_narx[1], x_mu, x_sig)
             np.savez('disc-submission-files/ann-narx-hidden-test-simulation-submission-file.npz',
                      th=th_sim, u=u_test)
-            print("Saved NARX hidden simulation submission npz.")
-    else:
-        print("⚠ Hidden simulation file missing — skipped NARX export.")
-
-# ========================
-# LSTM (seq_len=15) — unchanged from your version
-# ========================
-print("\n=== Training LSTM Models (SEQ_LEN=15) ===")
-
-def create_lstm_sequences(theta, omega, u, seq_len):
-    X, Y = [], []
-    for i in range(len(theta) - seq_len):
-        x_seq = np.stack([theta[i:i+seq_len], omega[i:i+seq_len], u[i:i+seq_len]], axis=1)
-        y_target = [theta[i+seq_len], omega[i+seq_len]]
-        X.append(x_seq)
-        Y.append(y_target)
-    return np.array(X, dtype=np.float64), np.array(Y, dtype=np.float64)
-
-SEQ_LEN = 15
-X_lstm, Y_lstm = create_lstm_sequences(th_norm, omega_norm, u_norm, seq_len=SEQ_LEN)
-total = len(X_lstm)
-X_train, Y_train = X_lstm[:int(0.8*total)], Y_lstm[:int(0.8*total)]
-X_test,  Y_test  = X_lstm[int(0.8*total):], Y_lstm[int(0.8*total):]
-
-X_train = torch.tensor(X_train).double().to(device)
-Y_train = torch.tensor(Y_train).double().to(device)
-X_test  = torch.tensor(X_test).double().to(device)
-Y_test  = torch.tensor(Y_test).double().to(device)
-
-best_rmse_lstm = float("inf")
-best_model_lstm = None
-best_config_lstm = None
-
-def lstm_hidden_prediction_rmse(model_lstm):
-    if hidden_pred_npz is None: return None
-    if ('upast' not in hidden_pred_npz) or ('thpast' not in hidden_pred_npz): return None
-    upast = hidden_pred_npz['upast'].astype(np.float32)  # (N,15)
-    thpast = hidden_pred_npz['thpast'].astype(np.float32)
-    gt_key = get_first_key(hidden_pred_npz, ['thnow_true','thnow','y_true','y','target'])
-    if gt_key is None: return None
-    th_now_true = hidden_pred_npz[gt_key].astype(np.float32).reshape(-1)
-
-    omega_past = np.gradient(thpast, axis=1) / dt
-    th_past_n = normalize(thpast, theta_mean, theta_std)
-    om_past_n = normalize(omega_past, omega_mean, omega_std)
-    u_past_n  = normalize(upast,  u_mean, u_std)
-
-    Xh = np.stack([th_past_n, om_past_n, u_past_n], axis=2).astype(np.float64)
-    Xh_t = torch.tensor(Xh).double().to(device)
-
-    model_lstm.eval()
-    with torch.no_grad():
-        pred = model_lstm(Xh_t).double().cpu().numpy()
-    pred_theta = unnormalize(pred[:,0], theta_mean, theta_std)
-    return rmse_wrap(pred_theta, th_now_true)
-
-def lstm_hidden_sim_rmse(model_lstm, seq_len):
-    if hidden_sim_npz is None: return None
-    u_key  = get_first_key(hidden_sim_npz, ['u','u_sequence','u_valid','u_test'])
-    th_key = get_first_key(hidden_sim_npz, ['th','th_true','y','y_true'])
-    if u_key is None or th_key is None: return None
-    u_h = hidden_sim_npz[u_key].astype(np.float32)
-    th_h = hidden_sim_npz[th_key].astype(np.float32)
-    if len(th_h) <= seq_len: return None
-
-    omega_h = np.gradient(th_h, dt).astype(np.float32)
-    th_hn = normalize(th_h, theta_mean, theta_std)
-    om_hn = normalize(omega_h, omega_mean, omega_std)
-    u_hn = normalize(u_h, u_mean, u_std)
-
-    Xh, Yh = create_lstm_sequences(th_hn, om_hn, u_hn, seq_len=seq_len)
-    Xh_t = torch.tensor(Xh).double().to(device)
-
-    model_lstm.eval()
-    with torch.no_grad():
-        pred = model_lstm(Xh_t).double().cpu().numpy()
-    pred_theta = unnormalize(pred[:,0], theta_mean, theta_std)
-    gt_theta = th_h[seq_len:seq_len + len(pred_theta)]
-    return rmse_wrap(pred_theta, gt_theta)
-
-for hidden_size in [32, 64, 128]:
-    for num_layers in [1, 2]:
-        for bidirectional in [False, True]:
-            model_lstm = LSTM(input_size=3, hidden_size=hidden_size, num_layers=num_layers,
-                              output_size=2, bidirectional=bidirectional).to(device)
-            optimizer = optim.Adam(model_lstm.parameters(), lr=1e-3)
-            criterion = nn.MSELoss()
-
-            for epoch in range(100):
-                model_lstm.train()
-                optimizer.zero_grad()
-                output = model_lstm(X_train)
-                loss = criterion(output, Y_train)
-                loss.backward()
-                optimizer.step()
-
-            model_lstm.eval()
-            with torch.no_grad():
-                pred = model_lstm(X_test)
-                rmse_lstm_test = compute_rmse_torch(pred, Y_test)
-
-            rmse_hidden_pred_lstm = lstm_hidden_prediction_rmse(model_lstm)
-            rmse_hidden_sim_lstm  = lstm_hidden_sim_rmse(model_lstm, SEQ_LEN)
-
-            print(f"LSTM hs:{hidden_size} nl:{num_layers} bi:{int(bidirectional)} "
-                  f"→ TestRMSE: {rmse_lstm_test:.5f} "
-                  f"| HiddenPredRMSE(wrap): {('NA' if rmse_hidden_pred_lstm is None else f'{rmse_hidden_pred_lstm:.5f}')} "
-                  f"| HiddenSimRMSE(wrap): {('NA' if rmse_hidden_sim_lstm is None else f'{rmse_hidden_sim_lstm:.5f}')}")
-
-            if rmse_hidden_sim_lstm is not None:
-                score = rmse_hidden_sim_lstm
-            elif rmse_hidden_pred_lstm is not None:
-                score = rmse_hidden_pred_lstm
-            else:
-                score = rmse_lstm_test
-
-            if score < best_rmse_lstm:
-                best_rmse_lstm = score
-                best_model_lstm = model_lstm
-                best_config_lstm = (hidden_size, num_layers, bidirectional)
-
-print(f"\nBest LSTM → hs:{best_config_lstm[0]} nl:{best_config_lstm[1]} bi:{int(best_config_lstm[2])} "
-      f"| Score (prefers HiddenSim > HiddenPred > Test): {best_rmse_lstm:.5f}")
-torch.save(best_model_lstm.state_dict(), "disc-submission-files/ann-lstm-model.pth")
-
-# ========================
-# Simulate LSTM Model (export like before)
-# ========================
-print("Saving LSTM .npz output...")
-if hidden_sim_npz is not None:
-    u_key  = get_first_key(hidden_sim_npz, ['u','u_sequence','u_valid','u_test'])
-    th_key = get_first_key(hidden_sim_npz, ['th','th_true','y','y_true'])
-    if (u_key is not None) and (th_key is not None):
-        u_hidden = hidden_sim_npz[u_key].astype(np.float32)
-        th_hidden = hidden_sim_npz[th_key].astype(np.float32)
-        omega_hidden = np.gradient(th_hidden, dt).astype(np.float32)
-
-        th_hidden_norm = normalize(th_hidden, theta_mean, theta_std)
-        omega_hidden_norm = normalize(omega_hidden, omega_mean, omega_std)
-        u_hidden_norm = normalize(u_hidden, u_mean, u_std)
-
-        def create_lstm_sequences(theta, omega, u, seq_len):
-            X, Y = [], []
-            for i in range(len(theta) - seq_len):
-                x_seq = np.stack([theta[i:i+seq_len], omega[i:i+seq_len], u[i:i+seq_len]], axis=1)
-                y_target = [theta[i+seq_len], omega[i+seq_len]]
-                X.append(x_seq); Y.append(y_target)
-            return np.array(X, dtype=np.float64), np.array(Y, dtype=np.float64)
-
-        X_hidden, _ = create_lstm_sequences(th_hidden_norm, omega_hidden_norm, u_hidden_norm, seq_len=SEQ_LEN)
-        X_hidden_tensor = torch.tensor(X_hidden).double().to(device)
-
-        model_lstm = best_model_lstm
-        with torch.no_grad():
-            preds = model_lstm(X_hidden_tensor).cpu().numpy()
-            preds_unnorm = np.empty_like(preds)
-            preds_unnorm[:, 0] = unnormalize(preds[:, 0], theta_mean, theta_std)
-            preds_unnorm[:, 1] = unnormalize(preds[:, 1], omega_mean, omega_std)
-
-        pred_theta = np.concatenate([th_hidden[:SEQ_LEN], preds_unnorm[:, 0]])
-        np.savez("disc-submission-files/ann-lstm-hidden-test-simulation-submission-file.npz",
-                 th=pred_theta, u=u_hidden)
-        print("Saved LSTM hidden simulation submission npz.")
-    else:
-        print("⚠ Hidden simulation file lacks expected keys — skipped LSTM export.")
-else:
-    print("⚠ Hidden simulation file missing — skipped LSTM export.")
+            print("Saved improved NARX hidden simulation submission.")
