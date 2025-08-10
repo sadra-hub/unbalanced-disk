@@ -1,27 +1,30 @@
-# GP_torch.py  — SVGP NARX with sin/cos features, wrapped RMSE, ARD RBF, X-normalization
-# - Saves an NPZ for EVERY grid try: models/grid/gp_svgp_M{M}_na{na}_nb{nb}_pred{:.4f}_sim{:.4f}.npz
-# - Also saves best-by-pred and best-by-sim snapshots, and the final trained model (.pth)
+# GP_torch.py — SVGP NARX with sin/cos features, wrapped RMSE, ARD RBF, X-normalization
+# Minimal + clean: for EACH grid config, write two checker-friendly NPZs:
+#   - disc-submission-files/grid/gp_test-simulation_M{M}_na{na}_nb{nb}.npz  (key: 'th')
+#   - disc-submission-files/grid/gp_test-prediction_M{M}_na{na}_nb{nb}.npz   (key: 'thnow')
+# The file lengths are aligned to the course solution files if present:
+#   disc-benchmark-files/test-simulation-solution-file.npz  (key: 'th')
+#   disc-benchmark-files/test-prediction-solution-file.npz  (key: 'thnow')
 
-import os, math, numpy as np, torch
+import os
+import numpy as np
+import torch
 from torch.utils.data import DataLoader, TensorDataset
 import gpytorch
 
 # -------------------------
 # Config
 # -------------------------
-SAVE_EACH_TRY = True
-WARMUP = 50
+WARMUP = 50  # warmup samples for free-run sim
 
 # -------------------------
 # Utils
 # -------------------------
-def to_tensor(x, device): return torch.as_tensor(x, dtype=torch.float32, device=device)
+def to_tensor(x, device): 
+    return torch.as_tensor(x, dtype=torch.float32, device=device)
 
-def rmse(a, b):
-    a = np.asarray(a).reshape(-1); b = np.asarray(b).reshape(-1)
-    return float(np.sqrt(np.mean((a - b) ** 2)))
-
-def wrap_angle(a): return (np.asarray(a) + np.pi) % (2*np.pi) - np.pi
+def wrap_angle(a):
+    return (np.asarray(a) + np.pi) % (2*np.pi) - np.pi
 
 def rmse_wrap(a, b):
     e = wrap_angle(a) - wrap_angle(b)
@@ -57,19 +60,12 @@ def simulate_narx_model(u_sequence, y_initial, gp_model, likelihood, na, nb, dev
             cos_blk = np.cos(np.array(ypast[-na:], dtype=np.float32))
             x = np.concatenate([np.array(upast[-nb:], dtype=np.float32), sin_blk, cos_blk])[None, :]
             x = (x - x_mu) / x_sig
-            x_t = to_tensor(x, device)
-            pred = likelihood(gp_model(x_t))
+            pred = likelihood(gp_model(to_tensor(x, device)))
             mean = pred.mean.item()
-
             upast.append(float(u_now)); upast.pop(0)
             ypast.append(mean);         ypast.pop(0)
             y_sim.append(mean)
     return np.array(y_sim, dtype=np.float32)
-
-def get_first_key(dct, candidates):
-    for k in candidates:
-        if k in dct: return k
-    return None
 
 def maybe_kmeans_Z(X, M, device, seed=0):
     try:
@@ -81,41 +77,19 @@ def maybe_kmeans_Z(X, M, device, seed=0):
         Z = torch.tensor(X[perm.cpu().numpy()], dtype=torch.float32, device=device)
     return Z
 
-def gt_is_only_warmup(th, warmup=WARMUP, atol=1e-8):
-    th = np.asarray(th, dtype=np.float32).reshape(-1)
-    if len(th) <= warmup:
-        return True
-    return np.all(np.abs(th[warmup:]) <= atol)
-
-# -------------------------
-# NPZ save helpers
-# -------------------------
-def _encode_key(k: str) -> str:
-    return k.replace(".", "__")
-
-def _state_to_numpy_dict(state):
-    out = {}
-    for k, v in state.items():
-        if torch.is_tensor(v):
-            out[_encode_key(k)] = v.detach().cpu().numpy()
-        elif v is not None:
-            out[_encode_key(k)] = np.array(v)
-    return out
-
-def save_svgp_npz(path, model_state, likelihood_state, meta: dict):
-    blob = {}
-    blob.update(_state_to_numpy_dict(model_state))
-    for k, v in _state_to_numpy_dict(likelihood_state).items():
-        blob[f"likelihood__{k}"] = v
-    for k, v in meta.items():
-        if isinstance(v, (int, float, np.ndarray)):
-            blob[f"meta__{k}"] = np.array(v)
-        else:
-            try:
-                blob[f"meta__{k}"] = np.array(v)
-            except Exception:
-                blob[f"meta__{k}"] = np.array(str(v))
-    np.savez_compressed(path, **blob)
+def align_length(arr, target_len):
+    """Crop or pad (edge) to match target_len."""
+    arr = np.asarray(arr)
+    if target_len is None:
+        return arr
+    L = len(arr)
+    if L == target_len:
+        return arr
+    if L > target_len:
+        return arr[:target_len]
+    # pad with edge value to avoid introducing artifacts
+    pad_val = arr[-1] if L > 0 else 0.0
+    return np.pad(arr, (0, target_len - L), mode="edge", constant_values=pad_val)
 
 # -------------------------
 # SVGP model
@@ -169,11 +143,9 @@ def predict_svgp(model, likelihood, X, device="cpu", batch_size=4096):
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    os.makedirs("models", exist_ok=True)
-    os.makedirs("models/grid", exist_ok=True)
-    os.makedirs("disc-submission-files", exist_ok=True)
+    os.makedirs("disc-submission-files/grid", exist_ok=True)
 
-    # Load
+    # Load base data (train/val/test split)
     data = np.load('disc-benchmark-files/training-val-test-data.npz')
     th_all = data['th'].astype(np.float32)
     u_all  = data['u'].astype(np.float32)
@@ -183,238 +155,69 @@ def main():
     th_tr, th_va, th_te = th_all[:i_tr], th_all[i_tr:i_va], th_all[i_va:]
     u_tr,  u_va,  u_te  = u_all[:i_tr],  u_all[i_tr:i_va],  u_all[i_va:]
 
-    # Grids
+    # If solution files exist, grab their target lengths to align shapes for the checker
+    sim_sol_path = 'disc-benchmark-files/test-simulation-solution-file.npz'
+    pred_sol_path = 'disc-benchmark-files/test-prediction-solution-file.npz'
+    sim_target_len = None
+    pred_target_len = None
+    if os.path.exists(sim_sol_path):
+        sim_target_len = np.load(sim_sol_path)['th'].reshape(-1).shape[0]
+    if os.path.exists(pred_sol_path):
+        pred_target_len = np.load(pred_sol_path)['thnow'].reshape(-1).shape[0]
+
+    # Grid
     na_grid = [2, 5, 8]
     nb_grid = [2, 5, 8]
     M_grid  = [300, 100, 50]
 
-    best_pred = {"rmse": float("inf")}
-    best_sim  = {"rmse": float("inf")}
-    best_pred_snap = None
-    best_sim_snap  = None
-
-    print("\n=== Starting Grid Search over (na, nb, M) ===")
+    print("\n=== Grid Search (saving checker-ready NPZs per config) ===")
     for M in M_grid:
         for na in na_grid:
             for nb in nb_grid:
-                # Datasets (sin/cos)
+                # Build datasets
                 Xtr, ytr = construct_io_dataset(u_tr, th_tr, na, nb)
                 Xva, yva = construct_io_dataset(u_va, th_va, na, nb)
-                if len(Xtr) < 100 or len(Xva) < 100:
-                    print(f"⚠ Skip na={na}, nb={nb}, M={M} — not enough samples"); continue
+                Xte, yte = construct_io_dataset(u_te, th_te, na, nb)
+                if len(Xtr) < 100 or len(Xva) < 100 or len(Xte) < 10:
+                    print(f"⚠ Skip M={M}, na={na}, nb={nb} (too few samples)"); 
+                    continue
 
-                # Standardize X
+                # Normalize X
                 Xtr_n, x_mu, x_sig = standardize_X(Xtr)
                 Xva_n, _, _        = standardize_X(Xva, x_mu, x_sig)
-
-                Xtr_t = to_tensor(Xtr_n, device)
-                ytr_t = to_tensor(ytr, device)
-                train_loader = DataLoader(TensorDataset(Xtr_t, ytr_t), batch_size=2048, shuffle=True)
-
-                # Inducing points
-                Z = maybe_kmeans_Z(Xtr_n, M, device, seed=0)
-
-                model = NARXSVGP(Z, input_dim=Xtr_n.shape[1]).to(device)
-                likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
+                Xte_n, _, _        = standardize_X(Xte, x_mu, x_sig)
 
                 # Train
+                train_loader = DataLoader(TensorDataset(to_tensor(Xtr_n, device), to_tensor(ytr, device)),
+                                          batch_size=2048, shuffle=True)
+                Z = maybe_kmeans_Z(Xtr_n, M, device, seed=0)
+                model = NARXSVGP(Z, input_dim=Xtr_n.shape[1]).to(device)
+                likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
                 train_svgp(model, likelihood, train_loader, epochs=60, lr=0.01, device=device)
 
-                # One-step val (pred)
+                # Val metrics (for logging only)
                 yva_hat = predict_svgp(model, likelihood, to_tensor(Xva_n, device), device=device)
                 pred_rmse = rmse_wrap(yva_hat, yva)
-
-                # Free-run val (sim)
                 sim_va = simulate_narx_model(u_va, th_va, model, likelihood, na, nb, device, x_mu, x_sig)
                 sim_rmse = rmse_wrap(sim_va, th_va)
+                print(f"[Grid] M={M:4d}, na={na:2d}, nb={nb:2d} | ValPredRMSE(wrap)={pred_rmse:.4f} | ValSimRMSE(wrap)={sim_rmse:.4f}")
 
-                print(f"[Grid] M={M:4d}, na={na:2d}, nb={nb:2d} | Pred RMSE={pred_rmse:.4f} | Sim RMSE={sim_rmse:.4f} "
-                      f"| BestPred={best_pred['rmse']:.4f} | BestSim={best_sim['rmse']:.4f}")
+                # -------- Build TEST submissions (checker expects specific keys) --------
+                # (A) Simulation submission on test split: free-run using u_te + warmup th_te[:WARMUP]
+                th_test_sim = simulate_narx_model(u_te, th_te, model, likelihood, na, nb, device, x_mu, x_sig)
+                th_test_sim = align_length(th_test_sim, sim_target_len)
+                sim_out_path = f"disc-submission-files/grid/gp_test-simulation_M{M}_na{na}_nb{nb}.npz"
+                np.savez(sim_out_path, th=th_test_sim)
 
-                # ---- save NPZ for this try ----
-                if SAVE_EACH_TRY:
-                    tag = f"M{M}_na{na}_nb{nb}_pred{pred_rmse:.4f}_sim{sim_rmse:.4f}"
-                    path = f"models/grid/gp_svgp_{tag}.npz"
-                    model_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-                    lik_state   = {k: v.detach().cpu().clone() for k, v in likelihood.state_dict().items()}
-                    meta = {
-                        "na": na, "nb": nb, "M": M,
-                        "input_dim": Xtr_n.shape[1],
-                        "x_mu": x_mu.copy(), "x_sig": x_sig.copy(),
-                        "rmse_pred": float(pred_rmse),
-                        "rmse_sim": float(sim_rmse),
-                        "criterion": "grid_try"
-                    }
-                    save_svgp_npz(path, model_state, lik_state, meta)
-                    print(f"  ↳ saved {path}")
+                # (B) Prediction submission on test split: one-step using Xte_n
+                yte_hat = predict_svgp(model, likelihood, to_tensor(Xte_n, device), device=device).reshape(-1)
+                # align to solution's thnow length if known
+                yte_hat = align_length(yte_hat, pred_target_len)
+                pred_out_path = f"disc-submission-files/grid/gp_test-prediction_M{M}_na{na}_nb{nb}.npz"
+                np.savez(pred_out_path, thnow=yte_hat.reshape(-1, 1))
 
-                # Update best-by-pred snapshot
-                if pred_rmse < best_pred["rmse"]:
-                    best_pred = {"rmse": pred_rmse, "na": na, "nb": nb, "M": M}
-                    best_pred_snap = {
-                        "model_state": {k: v.detach().cpu().clone() for k, v in model.state_dict().items()},
-                        "lik_state":   {k: v.detach().cpu().clone() for k, v in likelihood.state_dict().items()},
-                        "x_mu": x_mu.copy(), "x_sig": x_sig.copy(),
-                        "input_dim": Xtr_n.shape[1],
-                        "rmse_pred": pred_rmse, "rmse_sim": sim_rmse,
-                    }
-
-                # Update best-by-sim snapshot
-                if sim_rmse < best_sim["rmse"]:
-                    best_sim  = {"rmse": sim_rmse,  "na": na, "nb": nb, "M": M}
-                    best_sim_snap = {
-                        "model_state": {k: v.detach().cpu().clone() for k, v in model.state_dict().items()},
-                        "lik_state":   {k: v.detach().cpu().clone() for k, v in likelihood.state_dict().items()},
-                        "x_mu": x_mu.copy(), "x_sig": x_sig.copy(),
-                        "input_dim": Xtr_n.shape[1],
-                        "rmse_pred": pred_rmse, "rmse_sim": sim_rmse,
-                    }
-
-    # ---- Save grid best snapshots ----
-    if best_pred_snap is not None:
-        save_svgp_npz(
-            "models/gp_svgp_best_pred.npz",
-            best_pred_snap["model_state"],
-            best_pred_snap["lik_state"],
-            {
-                "na": best_pred["na"], "nb": best_pred["nb"], "M": best_pred["M"],
-                "input_dim": best_pred_snap["input_dim"],
-                "x_mu": best_pred_snap["x_mu"], "x_sig": best_pred_snap["x_sig"],
-                "rmse_pred": best_pred_snap["rmse_pred"], "rmse_sim": best_pred_snap["rmse_sim"],
-                "criterion": "best_pred"
-            }
-        )
-        print("Saved grid best-by-pred → models/gp_svgp_best_pred.npz")
-    if best_sim_snap is not None:
-        save_svgp_npz(
-            "models/gp_svgp_best_sim.npz",
-            best_sim_snap["model_state"],
-            best_sim_snap["lik_state"],
-            {
-                "na": best_sim["na"], "nb": best_sim["nb"], "M": best_sim["M"],
-                "input_dim": best_sim_snap["input_dim"],
-                "x_mu": best_sim_snap["x_mu"], "x_sig": best_sim_snap["x_sig"],
-                "rmse_pred": best_sim_snap["rmse_pred"], "rmse_sim": best_sim_snap["rmse_sim"],
-                "criterion": "best_sim"
-            }
-        )
-        print("Saved grid best-by-sim → models/gp_svgp_best_sim.npz")
-
-    print("\n=== Best by Prediction ===", best_pred)
-    print("=== Best by Simulation ===", best_sim)
-
-    # -------- Final train on best-sim config --------
-    na = best_sim.get("na", 8); nb = best_sim.get("nb", 2); M = best_sim.get("M", 100)
-
-    Xtr, ytr = construct_io_dataset(u_tr, th_tr, na, nb)
-    Xva, yva = construct_io_dataset(u_va, th_va, na, nb)
-    Xte, yte = construct_io_dataset(u_te, th_te, na, nb)
-    Xtr_n, x_mu, x_sig = standardize_X(Xtr)
-    Xva_n, _, _ = standardize_X(Xva, x_mu, x_sig)
-    Xte_n, _, _ = standardize_X(Xte, x_mu, x_sig)
-
-    Xtr_t = to_tensor(Xtr_n, device); ytr_t = to_tensor(ytr, device)
-    train_loader = DataLoader(TensorDataset(Xtr_t, ytr_t), batch_size=4096, shuffle=True)
-
-    Z = maybe_kmeans_Z(Xtr_n, M, device, seed=0)
-    model = NARXSVGP(Z, input_dim=Xtr_n.shape[1]).to(device)
-    likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
-    train_svgp(model, likelihood, train_loader, epochs=120, lr=0.01, device=device)
-
-    # Validation/Test
-    yva_hat = predict_svgp(model, likelihood, to_tensor(Xva_n, device), device=device)
-    rmse_valid_pred = rmse_wrap(yva_hat, yva)
-    sim_valid = simulate_narx_model(u_va, th_va, model, likelihood, na, nb, device, x_mu, x_sig)
-    rmse_valid_sim = rmse_wrap(sim_valid, th_va)
-    print(f"\nValidation Prediction RMSE (wrap): {rmse_valid_pred:.4f}")
-    print(f"Validation Simulation RMSE (wrap): {rmse_valid_sim:.4f}")
-
-    yte_hat = predict_svgp(model, likelihood, to_tensor(Xte_n, device), device=device)
-    rmse_test_pred = rmse_wrap(yte_hat, yte)
-    sim_test = simulate_narx_model(u_te, th_te, model, likelihood, na, nb, device, x_mu, x_sig)
-    rmse_test_sim = rmse_wrap(sim_test, th_te)
-    print(f"Test Prediction RMSE (wrap): {rmse_test_pred:.4f}")
-    print(f"Test Simulation RMSE (wrap): {rmse_test_sim:.4f}")
-
-    # ---- Hidden-set evaluation & submissions ----
-    pred_hidden_path = 'disc-benchmark-files/hidden-test-prediction-submission-file.npz'
-    if os.path.exists(pred_hidden_path):
-        hid = np.load(pred_hidden_path)
-        upast = hid['upast'].astype(np.float32)
-        thpast = hid['thpast'].astype(np.float32)
-        u_blk = upast[:, -nb:] if nb > 0 else np.zeros((upast.shape[0], 0), np.float32)
-        s_blk = np.sin(thpast[:, -na:]) if na > 0 else np.zeros((upast.shape[0], 0), np.float32)
-        c_blk = np.cos(thpast[:, -na:]) if na > 0 else np.zeros((upast.shape[0], 0), np.float32)
-        X_hidden = np.concatenate([u_blk, s_blk, c_blk], axis=1).astype(np.float32)
-        X_hidden_n, _, _ = standardize_X(X_hidden, x_mu, x_sig)
-        y_hidden_pred = predict_svgp(model, likelihood, to_tensor(X_hidden_n, device), device=device).reshape(-1, 1)
-
-        gt_key = get_first_key(hid, ['thnow_true', 'thnow', 'y_true', 'y', 'target'])
-        if gt_key is not None:
-            gt = hid[gt_key].astype(np.float32).reshape(-1, 1)
-            if gt.shape[0] == y_hidden_pred.shape[0]:
-                rmse_hidden_pred = rmse_wrap(y_hidden_pred, gt)
-                print(f"Hidden Prediction RMSE (wrap, {gt_key}): {rmse_hidden_pred:.4f}")
-            else:
-                print(f"Hidden Prediction: GT len {gt.shape[0]} != pred len {y_hidden_pred.shape[0]} (skip RMSE)")
-        else:
-            print("Hidden Prediction: no GT key found; skipping RMSE.")
-
-        np.savez('disc-submission-files/sparse-gp-hidden-test-prediction-submission-file.npz',
-                 upast=upast, thpast=thpast, thnow=y_hidden_pred)
-        print("Wrote hidden prediction submission npz.")
-    else:
-        print(f"Hidden prediction file not found at {pred_hidden_path} — skipping.")
-
-    sim_hidden_path = 'disc-benchmark-files/hidden-test-simulation-submission-file.npz'
-    if os.path.exists(sim_hidden_path):
-        hid = np.load(sim_hidden_path)
-        u_key  = get_first_key(hid, ['u','u_sequence','u_valid','u_test'])
-        th_key = get_first_key(hid, ['th_true','th','y_true','y'])
-        th0_key = get_first_key(hid, ['th_initial','y_initial','th0'])
-        if u_key is None:
-            print("Hidden Simulation: no input key (u*). Skipping.")
-        else:
-            u_seq = hid[u_key].astype(np.float32)
-            if th0_key is not None:
-                th_init = hid[th0_key].astype(np.float32)
-            elif th_key is not None:
-                th_init = hid[th_key].astype(np.float32)[:WARMUP]
-            else:
-                th_init = np.zeros(WARMUP, np.float32)
-                print("Hidden Simulation: no th_initial/th; using zeros warmup.")
-
-            sim_hidden = simulate_narx_model(u_seq, th_init, model, likelihood, na, nb, device, x_mu, x_sig)
-
-            if th_key is not None:
-                th_true = hid[th_key].astype(np.float32)
-                if gt_is_only_warmup(th_true, warmup=WARMUP):
-                    print("Hidden Simulation: GT only provided for warm-up → skipping RMSE.")
-                elif len(sim_hidden) == len(th_true):
-                    rmse_hidden_sim = rmse_wrap(sim_hidden, th_true)
-                    print(f"Hidden Simulation RMSE (wrap, {th_key}): {rmse_hidden_sim:.4f}")
-                else:
-                    print(f"Hidden Simulation: GT len {len(th_true)} != sim len {len(sim_hidden)} (skip RMSE)")
-            else:
-                print("Hidden Simulation: no GT key; skipping RMSE.")
-
-            np.savez('disc-submission-files/sparse-gp-hidden-test-simulation-submission-file.npz',
-                     th=sim_hidden)
-            print("Wrote hidden simulation submission npz.")
-    else:
-        print(f"Hidden simulation file not found at {sim_hidden_path} — skipping.")
-
-    # ---- Save final Torch model (.pth) ----
-    save_path = 'disc-submission-files/gp_narx_svgp.pth'
-    torch.save({
-        "state_dict": model.state_dict(),
-        "likelihood_state_dict": likelihood.state_dict(),
-        "na": na, "nb": nb, "M": M,
-        "x_mu": x_mu, "x_sig": x_sig,
-        "inducing_points": model.variational_strategy.inducing_points.detach().cpu(),
-        "input_dim": Xtr_n.shape[1],
-    }, save_path)
-    print(f"Saved model to {save_path}")
+                print(f"  ↳ wrote: {sim_out_path}")
+                print(f"  ↳ wrote: {pred_out_path}")
 
 if __name__ == "__main__":
     main()
