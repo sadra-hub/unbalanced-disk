@@ -2,8 +2,10 @@
 # Self-contained:
 # - Defines UnbalancedDisk env (keeps "do not edit" dynamics intact)
 # - Trains TWO linear IRL reward models from two expert logs:
-#     1) Upright-only    → disc-benchmark-files/exper-log-without-reference.csv
+#     1) Upright-only    → disc-benchmark-files/expert-log-without-reference.csv
+#        (headers: t,theta,omega,u)
 #     2) Ref-tracking    → disc-benchmark-files/expert-log-reference-tracking.csv
+#        (headers: t,theta,omega,u,theta_ref,track_err)  ← extra columns are ignored
 # - Uses each learned reward to train a SAC policy via Optuna (few trials, higher eval_freq)
 # - Saves the two best policies to:
 #     disc-submission-files/sac-model-upright.zip
@@ -38,13 +40,13 @@ from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnMaxEp
 SEED = 88
 np.random.seed(SEED); torch.manual_seed(SEED)
 
-LOG_UPRIGHT = "disc-benchmark-files/exper-log-without-reference.csv"     # header: t,theta,omega,u
-LOG_REF     = "disc-benchmark-files/expert-log-reference-tracking.csv"   # header: t,theta,omega,u
+LOG_UPRIGHT = "disc-benchmark-files/expert-log-without-reference.csv"     # t,theta,omega,u
+LOG_REF     = "disc-benchmark-files/expert-log-reference-tracking.csv"    # t,theta,omega,u,theta_ref,track_err
 
 MAX_EP_STEPS   = 600
 N_TRIALS        = 4                 # small search per objective
-TOTAL_TIMESTEPS = 60_000            # per trial
-EVAL_FREQ       = 10_000            # evaluate infrequently to save time
+TOTAL_TIMESTEPS = 30_000            # per trial
+EVAL_FREQ       = 20_000            # evaluate infrequently to save time
 N_EVAL_EPISODES = 3
 
 SAVE_DIR = "disc-submission-files"
@@ -153,6 +155,7 @@ class UnbalancedDisk(gym.Env):
 # IRL: feature map & training
 # =========================
 def phi_features(theta, omega, u):
+    # 12D features that don't depend on reference signals (so we can deploy w/o ref)
     return np.array([
         theta,
         theta**2,
@@ -169,12 +172,22 @@ def phi_features(theta, omega, u):
     ], dtype=np.float32)
 
 def load_expert(csv_path):
+    """
+    Reads expert logs robustly.
+    - Upright log headers: t,theta,omega,u
+    - Ref-tracking log headers: t,theta,omega,u,theta_ref,track_err
+      (we simply ignore the extra columns).
+    """
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"Expert log not found: {csv_path}")
     data = np.genfromtxt(csv_path, delimiter=',', names=True)
-    th = np.asarray(data['theta'], dtype=np.float32)
-    om = np.asarray(data['omega'], dtype=np.float32)
-    u  = np.asarray(data['u'],     dtype=np.float32)
+    # Ensure required columns exist
+    for col in ("theta", "omega", "u"):
+        if col not in data.dtype.names:
+            raise ValueError(f"Column '{col}' not found in {csv_path}. Found: {data.dtype.names}")
+    th = np.asarray(data["theta"], dtype=np.float32)
+    om = np.asarray(data["omega"], dtype=np.float32)
+    u  = np.asarray(data["u"],     dtype=np.float32)
     return th, om, u
 
 def sample_random_negatives(N, umax=3.0, dt=0.025, max_ep_steps=600, seed=SEED+1):
@@ -401,7 +414,7 @@ def main():
     # Train from upright-only expert log
     train_policy_from_log(LOG_UPRIGHT, tag="upright")
 
-    # Train from reference-tracking expert log
+    # Train from reference-tracking expert log (extra columns are ignored safely)
     train_policy_from_log(LOG_REF, tag="ref")
 
     print("\n[Done] Two policies saved to:")

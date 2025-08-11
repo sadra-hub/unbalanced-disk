@@ -72,3 +72,246 @@ RMS: 1.2810243903941056 degrees
 NRMS: 4.6643758341809205 %
   ↳ wrote disc-submission-files/ann-lstm_hidden-prediction_best_optuna.npz
   ↳ wrote disc-submission-files/ann-lstm_hidden-simulation_best_optuna.npz
+
+
+
+
+
+
+
+
+
+
+RMS: 0.008139604702591896 radians
+RMS: 0.4663649963633533 degrees
+NRMS: 1.7334829811104049 %
+train simulation errors:
+RMS: 0.04310082271695137 radians
+RMS: 2.4694952352228956 degrees
+NRMS: 9.181054813721968 %
+[I 2025-08-11 10:39:26,125] Trial 0 finished with value: 0.18808792531490326 and parameters: {'na': 12, 'nb': 12, 'M': 100, 'lr': 0.0038096918811668288, 'epochs': 140, 'batch_size': 2048}. Best is trial 0
+ with value: 0.18808792531490326.
+Best trial: 0. Best value: 0.188088:   5%|██████▌                                                                                                                           | 1/20 [02:35<49:20, 155.80s/it]
+train prediction errors:
+RMS: 0.003915248904377222 radians
+RMS: 0.22432723796403445 degrees
+NRMS: 0.8338534512541098 %
+train simulation errors:
+RMS: 0.03910360112786293 radians
+RMS: 2.2404713083895516 degrees
+NRMS: 8.32959286476988 %
+[I 2025-08-11 10:42:13,884] Trial 1 finished with value: 0.11589815467596054 and parameters: {'na': 10, 'nb': 8, 'M': 100, 'lr': 0.014451266182117749, 'epochs': 100, 'batch_size': 512}. Best is trial 1 wi
+th value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  10%|█████████████                                                                                                                     | 2/20 [05:23<48:51, 162.83s/it]
+train prediction errors:
+RMS: 0.0036985580809414387 radians
+RMS: 0.21191176832194958 degrees
+NRMS: 0.7876779920183057 %
+train simulation errors:
+RMS: 0.033477913588285446 radians
+RMS: 1.9181431555124255 degrees
+NRMS: 7.131245770448177 %
+[I 2025-08-11 10:45:53,716] Trial 2 finished with value: 0.11830702424049377 and parameters: {'na': 10, 'nb': 12, 'M': 200, 'lr': 0.010772267001978761, 'epochs': 140, 'batch_size': 1024}. Best is trial 1
+with value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  15%|███████████████████▌                                                                                                              | 3/20 [09:03<53:30, 188.86s/it]
+^[[B^[[B^[[B^[[B^[[B^[[B^[[B^[[B^[[B^[[B^[[B^[[B^[[B^[[B^[[B^[[Btrain prediction errors:
+RMS: 0.004502247553318739 radians
+RMS: 0.25795978312826484 degrees
+NRMS: 0.9588699856445946 %
+train simulation errors:
+RMS: 0.06834579259157181 radians
+RMS: 3.9159254629735534 degrees
+NRMS: 14.558572865099991 %
+[I 2025-08-11 10:48:38,972] Trial 3 finished with value: 0.12958413362503052 and parameters: {'na': 10, 'nb': 6, 'M': 50, 'lr': 0.009035597714655324, 'epochs': 120, 'batch_size': 512}. Best is trial 1 wit
+h value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  20%|██████████████████████████                                                                                                        | 4/20 [11:48<47:52, 179.54s/it]
+train prediction errors:
+RMS: 0.06777793169021606 radians
+RMS: 3.8833894299753746 degrees
+NRMS: 14.435561759639914 %
+train simulation errors:
+RMS: 0.2531677782535553 radians
+RMS: 14.505445202632623 degrees
+NRMS: 53.92814110483194 %
+[I 2025-08-11 10:50:33,325] Trial 4 finished with value: 0.30163854360580444 and parameters: {'na': 6, 'nb': 8, 'M': 100, 'lr': 0.0020081165817330796, 'epochs': 80, 'batch_size': 2048}. Best is trial 1 wi
+th value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  25%|████████████████████████████████▌                                                                                                 | 5/20 [13:42<39:00, 156.03s/it]
+train prediction errors:
+RMS: 0.004663195926696062 radians
+RMS: 0.2671814456422812 degrees
+NRMS: 0.9932175732367632 %
+train simulation errors:
+RMS: 0.06222165375947952 radians
+RMS: 3.5650381547424885 degrees
+NRMS: 13.254048942818365 %
+[I 2025-08-11 10:52:43,616] Trial 5 finished with value: 0.18514807522296906 and parameters: {'na': 5, 'nb': 6, 'M': 50, 'lr': 0.007922445179534957, 'epochs': 140, 'batch_size': 2048}. Best is trial 1 wit
+h value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  30%|███████████████████████████████████████                                                                                           | 6/20 [15:53<34:21, 147.28s/it]
+train prediction errors:
+RMS: 0.004157162271440029 radians
+RMS: 0.23818785290453243 degrees
+NRMS: 0.8853751554819819 %
+train simulation errors:
+RMS: 0.08530700206756592 radians
+RMS: 4.887731181385314 degrees
+NRMS: 18.171538560181205 %
+[I 2025-08-11 10:56:19,622] Trial 6 finished with value: 0.1669100821018219 and parameters: {'na': 10, 'nb': 4, 'M': 200, 'lr': 0.02416815361473764, 'epochs': 140, 'batch_size': 1024}. Best is trial 1 wit
+h value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  35%|█████████████████████████████████████████████▌                                                                                    | 7/20 [19:29<36:46, 169.75s/it]
+train prediction errors:
+RMS: 0.00773088913410902 radians
+RMS: 0.44294731926799435 degrees
+NRMS: 1.6466078340788295 %
+train simulation errors:
+RMS: 0.08589426428079605 radians
+RMS: 4.921378827670913 degrees
+NRMS: 18.296633308490335 %
+[I 2025-08-11 11:00:00,823] Trial 7 finished with value: 0.19279447197914124 and parameters: {'na': 5, 'nb': 6, 'M': 300, 'lr': 0.0016283433916610053, 'epochs': 100, 'batch_size': 1024}. Best is trial 1 w
+ith value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  40%|████████████████████████████████████████████████████                                                                              | 8/20 [23:10<37:13, 186.13s/it]
+train prediction errors:
+RMS: 0.004219081252813339 radians
+RMS: 0.24173554920897225 degrees
+NRMS: 0.8986572023690917 %
+train simulation errors:
+RMS: 0.06117940694093704 radians
+RMS: 3.505321810829067 degrees
+NRMS: 13.032036355418205 %
+[I 2025-08-11 11:03:30,532] Trial 8 finished with value: 0.18615677952766418 and parameters: {'na': 2, 'nb': 4, 'M': 200, 'lr': 0.0030831856102259453, 'epochs': 100, 'batch_size': 512}. Best is trial 1 wi
+th value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  45%|██████████████████████████████████████████████████████████▌                                                                       | 9/20 [26:40<35:28, 193.50s/it]
+train prediction errors:
+RMS: 0.01286255195736885 radians
+RMS: 0.7369699409249711 degrees
+NRMS: 2.7394128964818307 %
+train simulation errors:
+RMS: 0.13519582152366638 radians
+RMS: 7.746149981110019 degrees
+NRMS: 28.798527957258198 %
+[I 2025-08-11 11:06:00,067] Trial 9 finished with value: 0.24974170327186584 and parameters: {'na': 4, 'nb': 10, 'M': 50, 'lr': 0.0011447750276338022, 'epochs': 100, 'batch_size': 512}. Best is trial 1 wi
+th value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  50%|████████████████████████████████████████████████████████████████▌                                                                | 10/20 [29:09<29:59, 179.93s/it]
+train prediction errors:
+RMS: 0.0041859750635921955 radians
+RMS: 0.23983870429083917 degrees
+NRMS: 0.8915424246196133 %
+train simulation errors:
+RMS: 0.08740240335464478 radians
+RMS: 5.007788831521214 degrees
+NRMS: 18.617887211104946 %
+[I 2025-08-11 11:08:13,201] Trial 10 finished with value: 0.1366078108549118 and parameters: {'na': 8, 'nb': 5, 'M': 100, 'lr': 0.027056026081383352, 'epochs': 60, 'batch_size': 512}. Best is trial 1 with
+ value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  55%|██████████████████████████████████████████████████████████████████████▉                                                          | 11/20 [31:22<24:50, 165.61s/it]
+train prediction errors:
+RMS: 0.004099469166249037 radians
+RMS: 0.23488228147008425 degrees
+NRMS: 0.8730879175433437 %
+train simulation errors:
+RMS: 0.04944960027933121 radians
+RMS: 2.833253394614615 degrees
+NRMS: 10.53342980626272 %
+[I 2025-08-11 11:11:36,883] Trial 11 finished with value: 0.13380907475948334 and parameters: {'na': 10, 'nb': 8, 'M': 200, 'lr': 0.013144210298660019, 'epochs': 120, 'batch_size': 1024}. Best is trial 1
+with value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  60%|█████████████████████████████████████████████████████████████████████████████▍                                                   | 12/20 [34:46<23:37, 177.19s/it]
+train prediction errors:
+RMS: 0.0038525708951056004 radians
+RMS: 0.2207360525644887 degrees
+NRMS: 0.8204779377136391 %
+train simulation errors:
+RMS: 0.03163200989365578 radians
+RMS: 1.81238066442254 degrees
+NRMS: 6.7380434617001 %
+[I 2025-08-11 11:15:05,565] Trial 12 finished with value: 0.12378682941198349 and parameters: {'na': 10, 'nb': 12, 'M': 300, 'lr': 0.015235327795048692, 'epochs': 80, 'batch_size': 1024}. Best is trial 1
+with value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  65%|███████████████████████████████████████████████████████████████████████████████████▊                                             | 13/20 [38:15<21:47, 186.73s/it]
+train prediction errors:
+RMS: 0.003844108898192644 radians
+RMS: 0.22025121585512356 degrees
+NRMS: 0.8187023481881132 %
+train simulation errors:
+RMS: 0.050243206322193146 radians
+RMS: 2.878723671466682 degrees
+NRMS: 10.702478564980517 %
+[I 2025-08-11 11:18:10,198] Trial 13 finished with value: 0.1388886719942093 and parameters: {'na': 10, 'nb': 2, 'M': 100, 'lr': 0.006004022848811709, 'epochs': 120, 'batch_size': 512}. Best is trial 1 wi
+th value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  70%|██████████████████████████████████████████████████████████████████████████████████████████▎                                      | 14/20 [41:19<18:36, 186.10s/it]
+train prediction errors:
+RMS: 0.0037194958422333 radians
+RMS: 0.2131114136764256 degrees
+NRMS: 0.7921370848352378 %
+train simulation errors:
+RMS: 0.041832197457551956 radians
+RMS: 2.3968083620756198 degrees
+NRMS: 8.91082057431759 %
+[I 2025-08-11 11:20:59,387] Trial 14 finished with value: 0.15562324225902557 and parameters: {'na': 6, 'nb': 12, 'M': 200, 'lr': 0.014396774634370654, 'epochs': 80, 'batch_size': 1024}. Best is trial 1 w
+ith value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  75%|████████████████████████████████████████████████████████████████████████████████████████████████▊                                | 15/20 [44:09<15:04, 181.00s/it]
+train prediction errors:
+RMS: 0.004086582455784082 radians
+RMS: 0.23414392734863526 degrees
+NRMS: 0.8703151316120185 %
+train simulation errors:
+RMS: 0.06142774224281311 radians
+RMS: 3.519550375530673 degrees
+NRMS: 13.084935114072522 %
+[I 2025-08-11 11:24:09,106] Trial 15 finished with value: 0.12545077502727509 and parameters: {'na': 12, 'nb': 8, 'M': 100, 'lr': 0.009667194968471902, 'epochs': 120, 'batch_size': 512}. Best is trial 1 w
+ith value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  80%|███████████████████████████████████████████████████████████████████████████████████████████████████████▏                         | 16/20 [47:18<12:14, 183.62s/it]
+train prediction errors:
+RMS: 0.004844229202717543 radians
+RMS: 0.27755388830973887 degrees
+NRMS: 1.031703817051317 %
+train simulation errors:
+RMS: 0.10551883280277252 radians
+RMS: 6.045783778745453 degrees
+NRMS: 22.476930294446635 %
+[I 2025-08-11 11:26:37,141] Trial 16 finished with value: 0.21212169528007507 and parameters: {'na': 2, 'nb': 10, 'M': 200, 'lr': 0.017604793252326688, 'epochs': 60, 'batch_size': 1024}. Best is trial 1 w
+ith value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  85%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████▋                   | 17/20 [49:46<08:38, 172.92s/it]
+train prediction errors:
+RMS: 0.0036468119360506535 radians
+RMS: 0.2089469326136351 degrees
+NRMS: 0.7767509462880372 %
+train simulation errors:
+RMS: 0.044292427599430084 radians
+RMS: 2.5377691658361083 degrees
+NRMS: 9.434882677152357 %
+[I 2025-08-11 11:30:26,614] Trial 17 finished with value: 0.13449275493621826 and parameters: {'na': 4, 'nb': 5, 'M': 300, 'lr': 0.0043405830564411715, 'epochs': 80, 'batch_size': 512}. Best is trial 1 wi
+th value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  90%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████             | 18/20 [53:36<06:19, 189.92s/it]
+train prediction errors:
+RMS: 0.00398895563557744 radians
+RMS: 0.22855032258351216 degrees
+NRMS: 0.8495805935334269 %
+train simulation errors:
+RMS: 0.08835913985967636 radians
+RMS: 5.062605795365621 degrees
+NRMS: 18.82168495187357 %
+[I 2025-08-11 11:33:08,150] Trial 18 finished with value: 0.17111197113990784 and parameters: {'na': 8, 'nb': 2, 'M': 100, 'lr': 0.007160559795295676, 'epochs': 120, 'batch_size': 1024}. Best is trial 1 w
+ith value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898:  95%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████▌      | 19/20 [56:17<03:01, 181.39s/it]
+train prediction errors:
+RMS: 0.0038504069671034813 radians
+RMS: 0.2206120686227971 degrees
+NRMS: 0.8200436847482657 %
+train simulation errors:
+RMS: 0.03338012471795082 radians
+RMS: 1.9125402659588995 degrees
+NRMS: 7.110415426103938 %
+[I 2025-08-11 11:36:10,973] Trial 19 finished with value: 0.12021657824516296 and parameters: {'na': 10, 'nb': 8, 'M': 200, 'lr': 0.02110356197530144, 'epochs': 100, 'batch_size': 2048}. Best is trial 1 w
+ith value: 0.11589815467596054.
+Best trial: 1. Best value: 0.115898: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [59:20<00:00, 178.03s/it]
+=== Optuna best (by VAL wrapped Sim RMSE) ===
+{'na': 10, 'nb': 8, 'M': 100, 'lr': 0.014451266182117749, 'epochs': 100, 'batch_size': 512} | value: 0.11589815467596054
+train prediction errors:
+RMS: 0.004509872291237116 radians
+RMS: 0.25839664843088117 degrees
+NRMS: 0.9384353659602168 %
+train simulation errors:
+RMS: 0.050951965153217316 radians
+RMS: 2.919332561176993 degrees
+NRMS: 10.603988118223821 %
+
+Wrote best NPZs:
+   disc-submission-files/gp_optuna_test-simulation_M100_na10_nb8.npz
+   disc-submission-files/gp_optuna_test-prediction_M100_na10_nb8.npz
