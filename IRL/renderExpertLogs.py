@@ -1,8 +1,8 @@
 import time
 import numpy as np
-from UnbalancedDisk import UnbalancedDisk
+from env.UnbalancedDisk import UnbalancedDisk
 
-LOG_PATH = "behaviorCloning/logs/disk_human_20250809-205335.csv"
+LOG_PATH = "/Users/sadra/Documents/M.Sc./5sc28-machineLearningSystemsControl/new/IRL/logs/ExpertLogsWithTracking.csv"
 REALTIME = True
 
 def load_log(path):
