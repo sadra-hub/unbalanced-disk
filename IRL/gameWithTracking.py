@@ -8,7 +8,7 @@ import pygame
 
 # import env (adjust path/module if needed)
 sys.path.append(os.path.join(os.path.dirname(__file__), "envs"))
-from UnbalancedDisk import UnbalancedDisk
+from env.UnbalancedDisk import UnbalancedDisk
 
 
 def ensure_dir(p):

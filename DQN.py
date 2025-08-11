@@ -9,7 +9,7 @@ import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.wrappers import TimeLimit
 
-from UnbalancedDisk import UnbalancedDisk
+from env.UnbalancedDisk import UnbalancedDisk
 from stable_baselines3 import DQN
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnMaxEpisodes, CallbackList

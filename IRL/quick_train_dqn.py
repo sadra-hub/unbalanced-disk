@@ -5,7 +5,7 @@ from gymnasium.wrappers import TimeLimit
 from gymnasium import spaces
 from stable_baselines3 import DQN
 from stable_baselines3.common.monitor import Monitor
-from UnbalancedDisk import UnbalancedDisk
+from env.UnbalancedDisk import UnbalancedDisk
 
 def wrap_to_pi(x): return (x + math.pi) % (2 * math.pi) - math.pi
 

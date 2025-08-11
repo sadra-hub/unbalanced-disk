@@ -3,7 +3,7 @@ import numpy as np
 import gymnasium as gym
 from stable_baselines3 import DQN
 
-from UnbalancedDisk import UnbalancedDisk
+from env.UnbalancedDisk import UnbalancedDisk
 
 # ---------- Compat wrapper for reset(seed=None, options=None) ----------
 class ResetCompatWrapper(gym.Wrapper):

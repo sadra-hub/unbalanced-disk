@@ -2,7 +2,7 @@
 # Load a behavior-cloned policy and run it in UnbalancedDisk (optionally render).
 
 import argparse, math, numpy as np, torch
-from UnbalancedDisk import UnbalancedDisk
+from env.UnbalancedDisk import UnbalancedDisk
 
 class BCPolicy(torch.nn.Module):
     def __init__(self, in_dim=3, hidden=128):

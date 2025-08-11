@@ -6,7 +6,7 @@ import os, glob, csv, math
 import numpy as np
 import torch
 import torch.nn as nn
-from UnbalancedDisk import UnbalancedDisk
+from env.UnbalancedDisk import UnbalancedDisk
 
 # ======================
 # Config
