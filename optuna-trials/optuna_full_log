@@ -315,3 +315,33 @@ NRMS: 10.603988118223821 %
 Wrote best NPZs:
    disc-submission-files/gp_optuna_test-simulation_M100_na10_nb8.npz
    disc-submission-files/gp_optuna_test-prediction_M100_na10_nb8.npz
+
+
+
+
+[I 2025-08-11 10:56:42,752] Trial 0 finished with value: -399.9999448 and parameters: {'learning_rate': 0.00042355358465591625, 'exploration_fraction': 0.32226631941922573, 'exploration_final_eps': 0.0054
+37362137750174, 'discount_factor': 0.9513410298998618, 'target_update_interval': 1000, 'batch_size': 512, 'n_actions': 15, 'net_arch_style': 'medium'}. Best is trial 0 with value: -399.9999448.
+Using cpu device
+
+[I 2025-08-11 10:58:24,106] Trial 1 finished with value: -399.9999204 and parameters: {'learning_rate': 0.0020520528032519246, 'exploration_fraction': 0.49017260101073434, 'exploration_final_eps': 0.00383
+09678205661647, 'discount_factor': 0.9708166794520019, 'target_update_interval': 1000, 'batch_size': 256, 'n_actions': 21, 'net_arch_style': 'large'}. Best is trial 1 with value: -399.9999204.
+Using cpu device
+
+[I 2025-08-11 11:00:00,856] Trial 2 finished with value: -399.8946974 and parameters: {'learning_rate': 0.004614266370572403, 'exploration_fraction': 0.10066261619337823, 'exploration_final_eps': 0.057723
+41663192852, 'discount_factor': 0.9889702248257333, 'target_update_interval': 1000, 'batch_size': 256, 'n_actions': 12, 'net_arch_style': 'large'}. Best is trial 2 with value: -399.8946974.
+Using cpu device
+
+[I 2025-08-11 11:02:28,715] Trial 3 finished with value: -400.0071382 and parameters: {'learning_rate': 0.0001840928778545301, 'exploration_fraction': 0.2146970862693512, 'exploration_final_eps': 0.002885
+172258637941, 'discount_factor': 0.9580026570573772, 'target_update_interval': 5000, 'batch_size': 512, 'n_actions': 18, 'net_arch_style': 'huge'}. Best is trial 2 with value: -399.8946974.
+Using cpu device
+
+[I 2025-08-11 11:04:46,078] Trial 4 finished with value: -399.9999448 and parameters: {'learning_rate': 0.008381428534594627, 'exploration_fraction': 0.3182769976626284, 'exploration_final_eps': 0.0033476
+999002318535, 'discount_factor': 0.9550608926627467, 'target_update_interval': 5000, 'batch_size': 512, 'n_actions': 21, 'net_arch_style': 'large'}. Best is trial 2 with value: -399.8946974.
+Using cpu device
+
+[I 2025-08-11 11:06:48,812] Trial 5 finished with value: -399.86374780000006 and parameters: {'learning_rate': 0.0019397997708127132, 'exploration_fraction': 0.2797806913788258, 'exploration_final_eps': 0
+.0011338663290133865, 'discount_factor': 0.9622370422071311, 'target_update_interval': 1000, 'batch_size': 512, 'n_actions': 21, 'net_arch_style': 'large'}. Best is trial 5 with value: -399.86374780000006
+.
+Best trial value: -399.86374780000006
+Best hyperparameters: {'learning_rate': 0.0019397997708127132, 'exploration_fraction': 0.2797806913788258, 'exploration_final_eps': 0.0011338663290133865, 'discount_factor': 0.9622370422071311, 'target_up
+date_interval': 1000, 'batch_size': 512, 'n_actions': 21, 'net_arch_style': 'large'}

@@ -3,7 +3,7 @@ import numpy as np
 import gymnasium as gym
 from stable_baselines3 import DQN
 
-from env.UnbalancedDisk import UnbalancedDisk
+from DQN import DQN_UnbalancedDisk
 
 # ---------- Compat wrapper for reset(seed=None, options=None) ----------
 class ResetCompatWrapper(gym.Wrapper):
@@ -59,7 +59,7 @@ def build_torque_grid(n_actions: int, umax: float) -> np.ndarray:
     return np.linspace(-umax, umax, n_actions, dtype=np.float32)
 
 def make_env(dt=0.025, umax=3.0, obs_low=None, obs_high=None, n_actions=None):
-    base = UnbalancedDisk(dt=dt, umax=umax, algo="DQN")
+    base = DQN_UnbalancedDisk(dt=dt, umax=umax)
     env = ResetCompatWrapper(base)               # <-- put this OUTERMOST so it catches reset()
     if (obs_low is not None) and (obs_high is not None):
         env = ObsBoxWrapper(env, obs_low, obs_high)
@@ -68,7 +68,7 @@ def make_env(dt=0.025, umax=3.0, obs_low=None, obs_high=None, n_actions=None):
     return env
 
 # ---------- Load model first to read saved spaces ----------
-model_path = "disc-submission-files/dqn-model.zip"
+model_path = "best-models/dqn-model.zip"
 custom_objects = {"lr_schedule": lambda *_: 0.0, "exploration_schedule": lambda *_: 0.0}
 model = DQN.load(model_path, custom_objects=custom_objects, print_system_info=True)
 
