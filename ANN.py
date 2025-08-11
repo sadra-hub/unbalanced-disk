@@ -41,16 +41,14 @@ def create_IO_data(u, y, na, nb):
     return np.array(X, np.float32), np.array(Y, np.float32)
 
 def simulation_IO_model(predict_fn, ulist, ylist, skip=50, na=1, nb=1):
-    uarr = np.asarray(ulist, dtype=np.float32).reshape(-1)
-    yarr = np.asarray(ylist, dtype=np.float32).reshape(-1)
+    # accept list or np.array
+    upast = list(ulist[skip - nb:skip])
+    ypast = list(ylist[skip - na:skip])
+    Y     = list(ylist[:skip])
 
-    upast = uarr[skip - nb:skip].tolist()
-    ypast = yarr[skip - na:skip].tolist()
-    Y     = yarr[:skip].tolist()
-
-    for u_now in uarr[skip:]:
-        x = np.asarray(upast + ypast, dtype=np.float32)[None, :]
-        ypred = float(predict_fn(x))
+    for u_now in ulist[skip:]:
+        x = np.asarray(upast + ypast, dtype=np.float32)[None, :]  # shape (1, na+nb)
+        ypred = float(predict_fn(x))  # predict_fn should accept (1, D)
         Y.append(ypred)
 
         upast.append(float(u_now)); upast.pop(0)
