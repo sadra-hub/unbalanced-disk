@@ -412,13 +412,13 @@ def train_policy_from_log(log_path, tag):
 # =========================
 def main():
     # Train from upright-only expert log
-    #train_policy_from_log(LOG_UPRIGHT, tag="upright")
+    train_policy_from_log(LOG_UPRIGHT, tag="upright")
 
     # Train from reference-tracking expert log (extra columns are ignored safely)
     train_policy_from_log(LOG_REF, tag="ref")
 
     print("\n[Done] Two policies saved to:")
-    #print(f"  - {os.path.join(SAVE_DIR, 'sac-model-upright.zip')}")
+    print(f"  - {os.path.join(SAVE_DIR, 'sac-model-upright.zip')}")
     print(f"  - {os.path.join(SAVE_DIR, 'sac-model-ref.zip')}")
 
 if __name__ == "__main__":
