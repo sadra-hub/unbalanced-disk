@@ -1,18 +1,3 @@
-# ann_optuna_narx_lstm.py
-# Sadra's Optuna tuner for the unbalanced disc assignment
-# - Tunes NARX (MLP) with Optuna (default ON)
-# - (Optional) Tunes LSTM with Optuna (default OFF)
-# - Prints *exact* training prediction/simulation errors (RMS rad/deg + NRMS)
-# - Exports checker-ready NPZs for HIDDEN prediction/simulation:
-#     disc-submission-files/ann-narx_hidden-prediction_best_optuna.npz  (upast, thpast, thnow)
-#     disc-submission-files/ann-narx_hidden-simulation_best_optuna.npz  (u, th)
-#     (If LSTM enabled, similar files with ann-lstm_* names)
-#
-# Data files expected in ./disc-benchmark-files/:
-#   training-val-test-data.npz
-#   hidden-test-prediction-submission-file.npz
-#   hidden-test-simulation-submission-file.npz
-
 import os
 import numpy as np
 import torch
@@ -25,7 +10,7 @@ import optuna
 # Switches
 # -----------------------
 RUN_NARX_OPTUNA = True
-RUN_LSTM_OPTUNA = True   # flip to True if you want to tune LSTM too
+RUN_LSTM_OPTUNA = True
 
 # -----------------------
 # Setup
@@ -180,7 +165,6 @@ def train_narx(model, X, Y, epochs=120, bs=256, lr=1e-3):
     return model
 
 def narx_objective(trial: optuna.trial.Trial):
-    # IMPORTANT: keep na, nb <= HIDDEN_PRED_L so hidden prediction slicing works
     na = trial.suggest_int("na", 3, 10)
     nb = trial.suggest_int("nb", 2, 10)
     na = min(na, HIDDEN_PRED_L)
@@ -319,7 +303,6 @@ def train_lstm(model, X, Y, epochs=80, bs=128, lr=1e-3):
     return model
 
 def lstm_objective(trial: optuna.trial.Trial):
-    # Fix seq_len=15 to match hidden prediction past window
     seq_len = 15
     hs  = trial.suggest_categorical("hidden_units", [32, 64, 96, 128])
     nl  = trial.suggest_int("num_layers", 1, 3)
@@ -337,12 +320,10 @@ def lstm_objective(trial: optuna.trial.Trial):
     model = train_lstm(model, Xtr, Ytr, epochs=ep, bs=bs, lr=lr)
     model.eval()
 
-    # Validation simulation RMS (teacher-forced rolling): simulate free-run on val with skip=seq_len
     th_val_sim = simulate_lstm_free_run(model, list(u_va), list(th_va), seq_len=seq_len, skip=seq_len)
     err = th_val_sim[seq_len:] - th_va[seq_len:]
     val_sim_rms = float(np.sqrt(np.mean(err**2)))
 
-    # Also log pred RMS on val
     with torch.no_grad():
         y_pred_val = model(torch.tensor(Xva, dtype=torch.float32, device=device)).cpu().numpy().reshape(-1)
     pred_rms = float(np.sqrt(np.mean((y_pred_val - Yva)**2)))
@@ -422,7 +403,7 @@ def run_lstm_optuna(n_trials=20):
 # -----------------------
 if __name__ == "__main__":
     if RUN_NARX_OPTUNA:
-        run_narx_optuna(n_trials=25)     # adjust for speed/quality
+        run_narx_optuna(n_trials=25)
     if RUN_LSTM_OPTUNA:
         run_lstm_optuna(n_trials=20)
     print("\nDone.")

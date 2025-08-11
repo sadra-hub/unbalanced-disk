@@ -1,16 +1,3 @@
-# sac_irl_dual_policies.py
-# Self-contained:
-# - Defines UnbalancedDisk env (keeps "do not edit" dynamics intact)
-# - Trains TWO linear IRL reward models from two expert logs:
-#     1) Upright-only    → disc-benchmark-files/expert-log-without-reference.csv
-#        (headers: t,theta,omega,u)
-#     2) Ref-tracking    → disc-benchmark-files/expert-log-reference-tracking.csv
-#        (headers: t,theta,omega,u,theta_ref,track_err)  ← extra columns are ignored
-# - Uses each learned reward to train a SAC policy via Optuna (few trials, higher eval_freq)
-# - Saves the two best policies to:
-#     disc-submission-files/sac-model-upright.zip
-#     disc-submission-files/sac-model-ref.zip
-
 import os
 import math
 import json

@@ -1,4 +1,3 @@
-# dqn_unbalanced_disk.py
 import os
 import math
 import shutil

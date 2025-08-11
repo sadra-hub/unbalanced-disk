@@ -1,11 +1,3 @@
-# GP_torch_optuna.py
-# SVGP (GPyTorch) for NARX with sin/cos features + Optuna HPO
-# - Prints TRAIN prediction/simulation errors in the exact ANN format
-# - Optimizes (na, nb, inducing M, lr, epochs, batch_size) by minimizing VAL free-run RMSE (wrapped)
-# - Retrains best config on train+val and writes checker-ready NPZs on TEST split:
-#       disc-submission-files/gp_optuna_test-simulation_M{M}_na{na}_nb{nb}.npz   (key: 'th')
-#       disc-submission-files/gp_optuna_test-prediction_M{M}_na{na}_nb{nb}.npz   (key: 'thnow')
-
 import os
 import math
 import numpy as np
@@ -145,7 +137,7 @@ def simulate_narx_model(u_sequence, y_initial, gp_model, likelihood, na, nb, dev
     return np.array(y_sim, dtype=np.float32)
 
 # -------------------------
-# Pretty training prints (exact format)
+# training prints (according to example files)
 # -------------------------
 def print_train_prediction_metrics(y_pred_train, Ytrain):
     RMS = rmse(y_pred_train, Ytrain)
@@ -246,7 +238,6 @@ def main():
 
     # ----------------- Run study -----------------
     study = optuna.create_study(direction="minimize")
-    # NOTE: adjust n_trials to your budget
     study.optimize(objective, n_trials=20, show_progress_bar=True)
 
     best = study.best_trial.params
