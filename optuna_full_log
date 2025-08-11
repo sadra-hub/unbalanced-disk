@@ -1,0 +1,74 @@
+batch_size': 512, 'epochs': 100}. Best is trial 0 with value: 0.037234432995319366.
+[I 2025-08-11 08:25:01,945] Trial 6 pruned.
+[I 2025-08-11 08:26:13,448] Trial 7 pruned.
+[I 2025-08-11 08:27:22,920] Trial 8 pruned.
+[I 2025-08-11 08:28:55,793] Trial 9 pruned.
+[I 2025-08-11 08:30:18,284] Trial 10 pruned.
+[I 2025-08-11 08:30:50,306] Trial 11 finished with value: 0.03745757043361664 and parameters: {'na': 9, 'nb': 8, 'hidden_layers': 2, 'hidden_units': 64, 'activation': 'relu', 'lr': 0.00033091615981954426,
+ 'batch_size': 512, 'epochs': 120}. Best is trial 0 with value: 0.037234432995319366.
+[I 2025-08-11 08:31:24,771] Trial 12 pruned.
+[I 2025-08-11 08:32:16,387] Trial 13 pruned.
+[I 2025-08-11 08:32:55,472] Trial 14 pruned.
+[I 2025-08-11 08:33:58,198] Trial 15 pruned.
+[I 2025-08-11 08:34:37,538] Trial 16 pruned.
+[I 2025-08-11 08:35:07,176] Trial 17 pruned.
+[I 2025-08-11 08:36:20,767] Trial 18 pruned.
+[I 2025-08-11 08:36:52,835] Trial 19 pruned.
+[I 2025-08-11 08:37:41,509] Trial 20 pruned.
+[I 2025-08-11 08:38:13,265] Trial 21 pruned.
+[I 2025-08-11 08:38:48,523] Trial 22 pruned.
+[I 2025-08-11 08:39:11,086] Trial 23 pruned.
+[I 2025-08-11 08:39:54,379] Trial 24 pruned.
+Best trial: 0. Best value: 0.0372344: 100%|████████████████████████████████████████████████████████████| 25/25 [20:46<00:00, 49.88s/it]
+
+Best NARX trial:
+  na=8, nb=8, hl=2, hn=32, act=relu, lr=0.00069272, bs=128, epochs=160
+  val_sim_rms=0.037234, val_pred_rms=0.003455
+train prediction errors:
+RMS: 0.0032286117784678936 radians
+RMS: 0.18498582859243703 degrees
+NRMS: 0.6835925360582072 %
+train simulation errors:
+RMS: 0.05468965321779251 radians
+RMS: 3.133486312413573 degrees
+NRMS: 11.409429782880274 %
+  ↳ wrote disc-submission-files/ann-narx_hidden-prediction_best_optuna.npz
+  ↳ wrote disc-submission-files/ann-narx_hidden-simulation_best_optuna.npz
+
+=== Optuna: LSTM tuning (seq_len=15) ===
+[I 2025-08-11 08:41:38,789] A new study created in memory with name: no-name-2cd827e9-fb0e-4962-b329-d3c4c6f856bf
+[I 2025-08-11 08:44:10,147] Trial 0 finished with value: 0.09383448958396912 and parameters: {'hidden_units': 128, 'num_layers': 1, 'bidirectional': False, 'lr': 0.0011815188285302872, 'batch_size': 64, 'epochs': 60}. Best is trial 0 with value: 0.09383448958396912.
+[I 2025-08-11 08:48:43,041] Trial 1 finished with value: 0.05581406503915787 and parameters: {'hidden_units': 32, 'num_layers': 2, 'bidirectional': False, 'lr': 0.001993514604966374, 'batch_size': 64, 'epochs': 140}. Best is trial 1 with value: 0.05581406503915787.
+[I 2025-08-11 08:53:27,948] Trial 2 finished with value: 0.04221228137612343 and parameters: {'hidden_units': 64, 'num_layers': 2, 'bidirectional': True, 'lr': 0.002707968623393641, 'batch_size': 256, 'epochs': 60}. Best is trial 2 with value: 0.04221228137612343.
+[I 2025-08-11 08:56:09,533] Trial 3 finished with value: 0.08835318684577942 and parameters: {'hidden_units': 32, 'num_layers': 1, 'bidirectional': False, 'lr': 0.0017338256205128735, 'batch_size': 64, 'epochs': 120}. Best is trial 2 with value: 0.04221228137612343.
+[I 2025-08-11 08:57:25,908] Trial 4 finished with value: 0.03148958832025528 and parameters: {'hidden_units': 32, 'num_layers': 1, 'bidirectional': False, 'lr': 0.001987678447355752, 'batch_size': 256, 'epochs': 120}. Best is trial 4 with value: 0.03148958832025528.
+[I 2025-08-11 08:58:26,021] Trial 5 finished with value: 0.04683660715818405 and parameters: {'hidden_units': 32, 'num_layers': 2, 'bidirectional': False, 'lr': 0.0012336858757911484, 'batch_size': 256, 'epochs': 60}. Best is trial 4 with value: 0.03148958832025528.
+Best trial: 4. Best value: 0.0314896:  30%|████████████████████████▌                                                         | 6/20 [16:47<30:15, 129.69s/it][I 2025-08-11 09:06:47,990] Trial 6 pruned.                                                                                                                  
+[I 2025-08-11 09:18:32,946] Trial 7 pruned.                                                                                                                  
+[I 2025-08-11 09:21:29,829] Trial 8 finished with value: 0.05130547285079956 and parameters: {'hidden_units': 32, 'num_layers': 3, 'bidirectional': False, 'lr': 5.85469079789216e-05, 'batch_size': 256, 'epochs': 140}. Best is trial 4 with value: 0.03148958832025528.
+[I 2025-08-11 09:33:04,967] Trial 9 pruned.                                                                                                                  
+[I 2025-08-11 09:36:13,518] Trial 10 pruned.                                                                                                                 ^[[A^[[A^[[A^[[A^[[A
+[I 2025-08-11 09:41:39,450] Trial 11 pruned.                                                                                                                 
+[I 2025-08-11 09:46:03,184] Trial 12 pruned.                                                                                                                 
+[I 2025-08-11 09:52:35,944] Trial 13 pruned.                                                                                                                 
+[I 2025-08-11 09:54:02,912] Trial 14 finished with value: 0.049424439668655396 and parameters: {'hidden_units': 64, 'num_layers': 1, 'bidirectional': False, 'lr': 0.00018486200486468715, 'batch_size': 128, 'epochs': 80}. Best is trial 4 with value: 0.03148958832025528.
+[I 2025-08-11 10:00:21,816] Trial 15 finished with value: 0.02169804833829403 and parameters: {'hidden_units': 64, 'num_layers': 2, 'bidirectional': True, 'lr': 0.0007715438231721985, 'batch_size': 256, 'epochs': 120}. Best is trial 15 with value: 0.02169804833829403.
+[I 2025-08-11 10:07:36,904] Trial 16 finished with value: 0.04636525362730026 and parameters: {'hidden_units': 128, 'num_layers': 2, 'bidirectional': False, 'lr': 0.0006900329211772801, 'batch_size': 256, 'epochs': 120}. Best is trial 15 with value: 0.02169804833829403.
+[I 2025-08-11 10:11:50,573] Trial 17 finished with value: 0.04811030626296997 and parameters: {'hidden_units': 96, 'num_layers': 1, 'bidirectional': True, 'lr': 0.0002288335870574952, 'batch_size': 256, 'epochs': 120}. Best is trial 15 with value: 0.02169804833829403.
+[I 2025-08-11 10:13:31,930] Trial 18 finished with value: 0.03051312454044819 and parameters: {'hidden_units': 32, 'num_layers': 1, 'bidirectional': False, 'lr': 0.0009636907374942331, 'batch_size': 128, 'epochs': 120}. Best is trial 15 with value: 0.02169804833829403.
+[I 2025-08-11 10:18:50,135] Trial 19 finished with value: 0.026356661692261696 and parameters: {'hidden_units': 64, 'num_layers': 2, 'bidirectional': True, 'lr': 0.0003764068290669084, 'batch_size': 128, 'epochs': 80}. Best is trial 15 with value: 0.02169804833829403.
+Best trial: 15. Best value: 0.021698: 100%|███████████████████████████████████████████████████████████████████████████████| 20/20 [1:37:11<00:00, 291.57s/it]
+
+Best LSTM trial:
+  seq_len=15, hs=64, nl=2, bi=True, lr=0.00077154, bs=256, epochs=120
+  val_sim_rms=0.021698, val_pred_rms=0.003013
+train prediction errors:
+RMS: 0.0028544070664793253 radians
+RMS: 0.16354547792158353 degrees
+NRMS: 0.5953681644370459 %
+train simulation errors:
+RMS: 0.022358093410730362 radians
+RMS: 1.2810243903941056 degrees
+NRMS: 4.6643758341809205 %
+  ↳ wrote disc-submission-files/ann-lstm_hidden-prediction_best_optuna.npz
+  ↳ wrote disc-submission-files/ann-lstm_hidden-simulation_best_optuna.npz
