@@ -1,12 +1,15 @@
-# ANN_grid_export.py
-# Trains NARX (MLP) and LSTM on the unbalanced disc dataset.
-# After EACH grid config, saves two checker-ready NPZs on TEST split:
-#   - disc-submission-files/grid/ann-narx_test-simulation_*.npz        (key: 'th')
-#   - disc-submission-files/grid/ann-narx_test-prediction_*.npz         (keys: 'upast','thpast','thnow')
-#   - disc-submission-files/grid/ann-lstm_test-simulation_*.npz         (key: 'th')
-#   - disc-submission-files/grid/ann-lstm_test-prediction_*.npz         (keys: 'upast','thpast','thnow')
+# ANN_grid_export_exact_example.py
+# - Matches course examples IO:
+#   * Training prediction errors (exact prints)
+#   * Training simulation errors (exact prints)
+#   * Hidden PREDICTION export (upast, thpast -> thnow) respecting (na, nb) or seq_len=15
+#   * Hidden SIMULATION export (free-run from skip=50)
 #
-# Uses only u and θ (encoded as sin/cos); free-run simulation uses a 50-sample warm-up.
+# Saved files (per config):
+#   disc-submission-files/grid/ann-narx_hidden-prediction_*.npz      (upast, thpast, thnow)
+#   disc-submission-files/grid/ann-narx_hidden-simulation_*.npz      (th, u)
+#   disc-submission-files/grid/ann-lstm_hidden-prediction_*.npz      (upast, thpast, thnow)
+#   disc-submission-files/grid/ann-lstm_hidden-simulation_*.npz      (th, u)
 
 import os
 import numpy as np
@@ -21,355 +24,262 @@ from torch.utils.data import DataLoader, TensorDataset
 SEED = 88
 torch.manual_seed(SEED); np.random.seed(SEED)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-WARMUP = 50
-PRED_L = 15  # length of past window in output prediction NPZ (upast, thpast)
+WARMUP = 50           # hidden simulation warm-up
+HIDDEN_PRED_L = 15    # hidden prediction history length
 
 os.makedirs("disc-submission-files/grid", exist_ok=True)
 
 # -----------------------
-# Angle helpers & misc
+# IO helpers (match examples)
 # -----------------------
-def wrap_angle(a): return (a + np.pi) % (2*np.pi) - np.pi
-
-def rmse_wrap(pred_theta, true_theta):
-    pred_theta = np.asarray(pred_theta).reshape(-1)
-    true_theta = np.asarray(true_theta).reshape(-1)
-    err = wrap_angle(pred_theta - true_theta)
-    return float(np.sqrt(np.mean(err**2)))
-
-def sincos_to_theta(y_sc):  # y_sc: (N,2) with [sinθ, cosθ]
-    y_sc = np.asarray(y_sc)
-    return np.arctan2(y_sc[:, 0], y_sc[:, 1])
-
-def align_length(arr, target_len):
-    """Crop or pad with edge value to match solution length (if solution exists)."""
-    if target_len is None: 
-        return arr
-    arr = np.asarray(arr).reshape(-1)
-    if len(arr) == target_len:
-        return arr
-    if len(arr) > target_len:
-        return arr[:target_len]
-    pad_val = arr[-1] if len(arr) > 0 else 0.0
-    return np.pad(arr, (0, target_len - len(arr)), mode="edge", constant_values=pad_val)
-
-def make_pred_windows(u, th, L=15):
-    upast, thpast = [], []
-    for k in range(L, len(th)):
-        upast.append(u[k-L:k])
-        thpast.append(th[k-L:k])
-    return np.array(upast, np.float32), np.array(thpast, np.float32)
-
-# -----------------------
-# Data loading
-# -----------------------
-print("Loading data...")
-droot = "disc-benchmark-files"
-base = np.load(os.path.join(droot, "training-val-test-data.npz"))
-th_all = base["th"].astype(np.float32)
-u_all  = base["u"].astype(np.float32)
-
-N = len(th_all)
-i_tr = int(0.8*N); i_va = int(0.9*N)
-th_tr, th_va, th_te = th_all[:i_tr], th_all[i_tr:i_va], th_all[i_va:]
-u_tr,  u_va,  u_te  = u_all[:i_tr],  u_all[i_tr:i_va],  u_all[i_va:]
-
-# Read official TEST solution lengths (if present) to guarantee checker shape match
-sim_sol_path  = os.path.join(droot, "test-simulation-solution-file.npz")
-pred_sol_path = os.path.join(droot, "test-prediction-solution-file.npz")
-sim_target_len  = np.load(sim_sol_path)["th"].size      if os.path.exists(sim_sol_path)  else None
-pred_target_len = np.load(pred_sol_path)["thnow"].size  if os.path.exists(pred_sol_path) else None
-
-# -----------------------
-# NARX dataset (sin/cos targets)
-# -----------------------
-def create_IO_data_sincos(u, th, na, nb):
-    s = np.sin(th).astype(np.float32)
-    c = np.cos(th).astype(np.float32)
+def create_IO_data(u, y, na, nb):
     X, Y = [], []
     start = max(na, nb)
-    for k in range(start, len(th)):
-        X.append(np.concatenate([u[k-nb:k], s[k-na:k], c[k-na:k]], axis=0))
-        Y.append([s[k], c[k]])  # target for θ_k
+    for k in range(start, len(y)):
+        X.append(np.concatenate([u[k-nb:k], y[k-na:k]]))
+        Y.append(y[k])
     return np.array(X, np.float32), np.array(Y, np.float32)
 
-def standardize_X(X, mu=None, sig=None):
-    if mu is None:
-        mu = X.mean(0)
-        sig = X.std(0) + 1e-12
-    return (X - mu) / sig, mu, sig
+def simulation_IO_model(predict_fn, ulist, ylist, skip=50, na=1, nb=1):
+    # Exactly like the example: warm up with 'skip' true outputs, then free-run
+    upast = ulist[skip-nb:skip].tolist()
+    ypast = ylist[skip-na:skip].tolist()
+    Y = ylist[:skip].tolist()
+    for u in ulist[skip:]:
+        x = np.concatenate([upast, ypast], axis=0)
+        ypred = float(predict_fn(x[None, :]))
+        Y.append(ypred)
+        upast.append(float(u)); upast.pop(0)
+        ypast.append(ypred);   ypast.pop(0)
+    return np.array(Y, np.float32)
 
 # -----------------------
-# NARX model (MLP predicting [sinθ, cosθ])
+# Models
 # -----------------------
-class NARX(nn.Module):
-    def __init__(self, input_dim, hidden_neuron=64, hidden_layers=2, activation="relu", dropout=0.0):
+class NARX_MLP(nn.Module):
+    def __init__(self, input_dim, hidden_neuron=64, hidden_layers=1, activation="relu"):
         super().__init__()
         act = nn.ReLU if activation == "relu" else nn.Tanh
         layers = []
         in_f = input_dim
         for _ in range(hidden_layers):
-            layers += [nn.Linear(in_f, hidden_neuron), act(), nn.Dropout(dropout)]
+            layers += [nn.Linear(in_f, hidden_neuron), act()]
             in_f = hidden_neuron
-        self.mlp = nn.Sequential(*layers, nn.Linear(in_f, 2))  # outputs [sin, cos]
+        layers += [nn.Linear(in_f, 1)]
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x):
-        y = self.mlp(x)
-        y = y / (torch.norm(y, dim=1, keepdim=True) + 1e-8)  # project to unit circle
-        return y
+        return self.net(x)  # (N,1)
 
-def angle_aware_loss(pred_sc, target_sc, alpha=0.5):
-    """MSE on sin/cos + wrapped angular loss + small unit-norm penalty."""
-    mse = nn.functional.mse_loss(pred_sc, target_sc)
-    pred_th   = torch.atan2(pred_sc[:, 0], pred_sc[:, 1])
-    target_th = torch.atan2(target_sc[:, 0], target_sc[:, 1])
-    diff = torch.atan2(torch.sin(pred_th - target_th), torch.cos(pred_th - target_th))
-    ang = torch.mean(diff**2)
-    unit_pen = torch.mean((torch.norm(pred_sc, dim=1) - 1.0)**2)
-    return mse + alpha*ang + 0.01*unit_pen
-
-def simulate_narx_sincos(ulist, ylist, model, na, nb, x_mu, x_sig):
-    # Free-run with WARMUP; feed back predicted θ as sin/cos
-    ylist = list(ylist[:WARMUP])
-    upast = list(ulist[WARMUP-nb:WARMUP])
-    ypast = list(ylist[-na:])
-    model.eval()
-    with torch.no_grad():
-        for unow in ulist[WARMUP:]:
-            sin_blk = np.sin(np.array(ypast[-na:], np.float32))
-            cos_blk = np.cos(np.array(ypast[-na:], np.float32))
-            x = np.concatenate([np.array(upast[-nb:], np.float32), sin_blk, cos_blk], axis=0)[None, :]
-            x = (x - x_mu) / x_sig
-            y_sc = model(torch.tensor(x, dtype=torch.float32, device=device)).cpu().numpy()[0]
-            y_new = float(np.arctan2(y_sc[0], y_sc[1]))
-            upast.append(float(unow)); upast.pop(0)
-            ypast.append(y_new);       ypast.pop(0)
-            ylist.append(y_new)
-    return np.array(ylist, np.float32)
-
-# -----------------------
-# LSTM (sequence of [u, sinθ, cosθ] → next [sinθ, cosθ])
-# -----------------------
-def create_lstm_sequences(u, th, seq_len):
-    s = np.sin(th).astype(np.float32)
-    c = np.cos(th).astype(np.float32)
-    X, Y = [], []
-    for i in range(len(th) - seq_len):
-        X.append(np.stack([u[i:i+seq_len], s[i:i+seq_len], c[i:i+seq_len]], axis=1))  # (seq,3)
-        Y.append([s[i+seq_len], c[i+seq_len]])
-    return np.array(X, np.float32), np.array(Y, np.float32)
-
-class LSTMHead(nn.Module):
-    def __init__(self, input_size=3, hidden_size=64, num_layers=1, bidirectional=False, dropout=0.0):
+class LSTM_Seq2One(nn.Module):
+    # Input sequence: (batch, seq_len, 2) with features [u, y]
+    def __init__(self, input_size=2, hidden_size=64, num_layers=1, bidirectional=False):
         super().__init__()
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True,
-                            bidirectional=bidirectional, dropout=(dropout if num_layers > 1 else 0.0))
+                            bidirectional=bidirectional)
         d = 2 if bidirectional else 1
-        self.fc = nn.Linear(hidden_size*d, 2)
+        self.fc = nn.Linear(hidden_size*d, 1)
 
     def forward(self, x):
-        out, _ = self.lstm(x)
-        y = self.fc(out[:, -1, :])
-        y = y / (torch.norm(y, dim=1, keepdim=True) + 1e-8)
+        out, _ = self.lstm(x)           # (B, T, H*d)
+        y = self.fc(out[:, -1, :])      # (B, 1)
         return y
 
-def simulate_lstm(ulist, ylist, model, seq_len):
-    # Free-run with WARMUP; maintain rolling window of [u, sinθ, cosθ]
-    y = np.array(ylist, np.float32)
-    u = np.array(ulist, np.float32)
-    s = np.sin(y); c = np.cos(y)
-    Xwin = np.stack([u[WARMUP-seq_len:WARMUP], s[WARMUP-seq_len:WARMUP], c[WARMUP-seq_len:WARMUP]], axis=1)  # (seq,3)
-    traj = list(y[:WARMUP])
+def create_lstm_sequences(u, y, seq_len):
+    X, Y = [], []
+    for i in range(len(y) - seq_len):
+        X.append(np.stack([u[i:i+seq_len], y[i:i+seq_len]], axis=1))  # (seq_len, 2)
+        Y.append(y[i+seq_len])
+    return np.array(X, np.float32), np.array(Y, np.float32)
+
+def simulate_lstm_free_run(model, ulist, ylist, seq_len, skip):
+    # Use 'skip' real samples to seed (skip=seq_len for training sim; skip=50 for hidden sim)
+    u = np.array(ulist, np.float32); y = np.array(ylist, np.float32)
+    Xwin = np.stack([u[skip-seq_len:skip], y[skip-seq_len:skip]], axis=1)  # (seq_len, 2)
+    traj = list(y[:skip])
     model.eval()
     with torch.no_grad():
-        for t in range(WARMUP, len(u)):
+        for t in range(skip, len(u)):
             x_t = torch.tensor(Xwin[None, ...], dtype=torch.float32, device=device)
-            y_sc = model(x_t).cpu().numpy()[0]
-            y_new = float(np.arctan2(y_sc[0], y_sc[1]))
-            traj.append(y_new)
+            y_pred = float(model(x_t).cpu().numpy().reshape(-1)[0])
+            traj.append(y_pred)
             Xwin = np.roll(Xwin, shift=-1, axis=0)
             Xwin[-1, 0] = u[t]
-            Xwin[-1, 1] = np.sin(y_new)
-            Xwin[-1, 2] = np.cos(y_new)
+            Xwin[-1, 1] = y_pred
     return np.array(traj, np.float32)
 
 # -----------------------
-# Training helpers
+# Load data
 # -----------------------
-def train_narx(model, Xtr, Ytr, Xva, Yva, epochs=200, bs=256, lr=2e-3):
+print("Loading data...")
+droot = "disc-benchmark-files"
+base = np.load(os.path.join(droot, "training-val-test-data.npz"))
+th = base["th"].astype(np.float32)
+u  = base["u"].astype(np.float32)
+
+# Hidden files (templates)
+hidden_pred_path = os.path.join(droot, "hidden-test-prediction-submission-file.npz")
+hidden_sim_path  = os.path.join(droot, "hidden-test-simulation-submission-file.npz")
+hidden_pred = np.load(hidden_pred_path) if os.path.exists(hidden_pred_path) else None
+hidden_sim  = np.load(hidden_sim_path)  if os.path.exists(hidden_sim_path)  else None
+if hidden_pred is None: print("⚠ hidden-test-prediction-submission-file.npz not found; will skip hidden prediction export.")
+if hidden_sim  is None: print("⚠ hidden-test-simulation-submission-file.npz not found; will skip hidden simulation export.")
+
+# -----------------------
+# Training utils
+# -----------------------
+def train_mlp(model, X, Y, epochs=200, bs=256, lr=1e-3):
     model = model.to(device)
-    train_loader = DataLoader(TensorDataset(torch.tensor(Xtr), torch.tensor(Ytr)), batch_size=bs, shuffle=True)
-    opt = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    best = float("inf"); best_state = None
-    for ep in range(epochs):
+    ds = TensorDataset(torch.tensor(X), torch.tensor(Y).unsqueeze(1))
+    loader = DataLoader(ds, batch_size=bs, shuffle=True)
+    opt = optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.MSELoss()
+    for _ in range(epochs):
         model.train()
-        for xb, yb in train_loader:
+        for xb, yb in loader:
             xb, yb = xb.to(device), yb.to(device)
             opt.zero_grad()
             pred = model(xb)
-            loss = angle_aware_loss(pred, yb)
+            loss = loss_fn(pred, yb)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
-        if (ep+1) % 20 == 0:
-            model.eval()
-            with torch.no_grad():
-                y_sc = model(torch.tensor(Xva, dtype=torch.float32, device=device)).cpu().numpy()
-            val_rmse = rmse_wrap(sincos_to_theta(y_sc), np.arctan2(Yva[:,0], Yva[:,1]))
-            if val_rmse < best:
-                best = val_rmse
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-    if best_state is not None:
-        model.load_state_dict(best_state)
     return model
 
-def train_lstm(model, Xtr, Ytr, Xva, Yva, epochs=80, bs=128, lr=2e-3):
+def train_lstm(model, X, Y, epochs=80, bs=128, lr=1e-3):
     model = model.to(device)
-    train_loader = DataLoader(TensorDataset(torch.tensor(Xtr), torch.tensor(Ytr)), batch_size=bs, shuffle=True)
-    opt = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    best = float("inf"); best_state = None
-    for ep in range(epochs):
+    ds = TensorDataset(torch.tensor(X), torch.tensor(Y).unsqueeze(1))
+    loader = DataLoader(ds, batch_size=bs, shuffle=True)
+    opt = optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.MSELoss()
+    for _ in range(epochs):
         model.train()
-        for xb, yb in train_loader:
+        for xb, yb in loader:
             xb, yb = xb.to(device), yb.to(device)
             opt.zero_grad()
             pred = model(xb)
-            loss = angle_aware_loss(pred, yb)
+            loss = loss_fn(pred, yb)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
-        if (ep+1) % 10 == 0:
-            model.eval()
-            with torch.no_grad():
-                y_sc = model(torch.tensor(Xva, dtype=torch.float32, device=device)).cpu().numpy()
-            val_rmse = rmse_wrap(sincos_to_theta(y_sc), np.arctan2(Yva[:,0], Yva[:,1]))
-            if val_rmse < best:
-                best = val_rmse
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-    if best_state is not None:
-        model.load_state_dict(best_state)
     return model
 
-# -----------------------
-# NARX grid → save NPZs per config
-# -----------------------
+def print_train_pred_metrics(y_pred, y_true):
+    err = y_pred.reshape(-1) - y_true.reshape(-1)
+    RMS = float(np.sqrt(np.mean(err**2)))
+    print('train prediction errors:')
+    print('RMS:', RMS, 'radians')
+    print('RMS:', RMS/(2*np.pi)*360, 'degrees')
+    print('NRMS:', RMS/np.std(y_true)*100, '%')
+
+def print_train_sim_metrics(th_sim, th_true, skip):
+    err = th_sim[skip:] - th_true[skip:]
+    RMS = float(np.sqrt(np.mean(err**2)))
+    print('train simulation errors:')
+    print('RMS:', RMS, 'radians')
+    print('RMS:', RMS/(2*np.pi)*360, 'degrees')
+    print('NRMS:', RMS/np.std(th_true)*100, '%')
+
+# ============================================================
+# NARX GRID
+# ============================================================
 narx_na_grid = [5, 8]
 narx_nb_grid = [3, 5]
 narx_hl_grid = [1, 2]
-narx_hn_grid = [64, 128]
+narx_hn_grid = [32, 64]
 narx_act_grid = ["relu", "tanh"]
 
-print("\n=== NARX grid (saving checker-ready files per config) ===")
+print("\n=== NARX (MLP) ===")
 for na in narx_na_grid:
     for nb in narx_nb_grid:
-        # Build IO data
-        Xtr_np, Ytr_np = create_IO_data_sincos(u_tr, th_tr, na, nb)
-        Xva_np, Yva_np = create_IO_data_sincos(u_va, th_va, na, nb)
-        Xte_np, Yte_np = create_IO_data_sincos(u_te, th_te, na, nb)
-        if len(Xtr_np) < 100 or len(Xte_np) < 10:
-            print(f"skip NARX na={na} nb={nb} (too few samples)"); continue
-
-        # Standardize with train stats
-        Xtr, x_mu, x_sig = standardize_X(Xtr_np)
-        Xva, _, _        = standardize_X(Xva_np, x_mu, x_sig)
-        Xte, _, _        = standardize_X(Xte_np, x_mu, x_sig)
-
+        # Build TRAIN IO dataset from the whole data (as in the example)
+        Xtrain, Ytrain = create_IO_data(u, th, na, nb)
         for hl in narx_hl_grid:
             for hn in narx_hn_grid:
                 for act in narx_act_grid:
                     tag = f"na{na}_nb{nb}_hl{hl}_hn{hn}_act{act}"
-                    print(f"  NARX [{tag}]")
+                    print(f"\n[NARX] Config: {tag}")
 
-                    model = NARX(input_dim=Xtr.shape[1], hidden_neuron=hn, hidden_layers=hl, activation=act)
-                    model = train_narx(model, Xtr, Ytr_np, Xva, Yva_np)
+                    model = NARX_MLP(input_dim=Xtrain.shape[1], hidden_neuron=hn, hidden_layers=hl, activation=act)
+                    model = train_mlp(model, Xtrain, Ytrain, epochs=200, bs=256, lr=1e-3)
 
-                    # (A) TEST prediction → upast/thpast (L=15) + thnow computed with model's own (na,nb) features
-                    upast15, thpast15 = make_pred_windows(u_te, th_te, L=PRED_L)
-                    thnow_list = []
+                    # (1) TRAIN prediction metrics
                     with torch.no_grad():
-                        for k in range(PRED_L, len(th_te)):
-                            u_blk  = u_te[k-nb:k].astype(np.float32) if nb > 0 else np.zeros(0, np.float32)
-                            th_blk = th_te[k-na:k].astype(np.float32) if na > 0 else np.zeros(0, np.float32)
-                            s_blk, c_blk = np.sin(th_blk), np.cos(th_blk)
-                            x = np.concatenate([u_blk, s_blk, c_blk], axis=0)[None, :]
-                            x = (x - x_mu) / x_sig
-                            y_sc = model(torch.tensor(x, dtype=torch.float32, device=device)).cpu().numpy()[0]
-                            thnow_list.append(np.arctan2(y_sc[0], y_sc[1]))
-                    thnow = np.array(thnow_list, np.float32)
-                    # Align to test-solution length if present
-                    TL = pred_target_len if pred_target_len is not None else len(thnow)
-                    upast15  = upast15[:TL]
-                    thpast15 = thpast15[:TL]
-                    thnow    = thnow[:TL]
-                    pred_out = f"disc-submission-files/grid/ann-narx_test-prediction_{tag}.npz"
-                    np.savez(pred_out, upast=upast15, thpast=thpast15, thnow=thnow.reshape(-1,1))
+                        y_pred_train = model(torch.tensor(Xtrain, dtype=torch.float32, device=device)).cpu().numpy().reshape(-1)
+                    print_train_pred_metrics(y_pred_train, Ytrain)
 
-                    # (B) TEST simulation → th (free-run)
-                    th_test_sim = simulate_narx_sincos(list(u_te), list(th_te), model, na, nb, x_mu, x_sig)
-                    th_test_sim = align_length(th_test_sim, sim_target_len)
-                    sim_out = f"disc-submission-files/grid/ann-narx_test-simulation_{tag}.npz"
-                    np.savez(sim_out, th=th_test_sim)
+                    # (2) TRAIN simulation metrics (skip = max(na, nb))
+                    skip_train = max(na, nb)
+                    def _mlp_fn(x_np):
+                        x_t = torch.tensor(x_np, dtype=torch.float32, device=device)
+                        return model(x_t).cpu().numpy().reshape(-1)[0]
+                    th_train_sim = simulation_IO_model(_mlp_fn, list(u), list(th), skip=skip_train, na=na, nb=nb)
+                    print_train_sim_metrics(th_train_sim, th, skip_train)
 
-                    print(f"    ↳ wrote {os.path.basename(pred_out)} and {os.path.basename(sim_out)}")
+                    # (3) Hidden PREDICTION export
+                    if hidden_pred is not None and "upast" in hidden_pred and "thpast" in hidden_pred:
+                        up = hidden_pred["upast"].astype(np.float32)   # (N, 15)
+                        tp = hidden_pred["thpast"].astype(np.float32)  # (N, 15)
+                        Xh = np.concatenate([up[:, HIDDEN_PRED_L-nb:], tp[:, HIDDEN_PRED_L-na:]], axis=1).astype(np.float32)
+                        with torch.no_grad():
+                            y_hat = model(torch.tensor(Xh, dtype=torch.float32, device=device)).cpu().numpy().reshape(-1,1)
+                        out_pred = f"disc-submission-files/grid/ann-narx_hidden-prediction_{tag}.npz"
+                        np.savez(out_pred, upast=up, thpast=tp, thnow=y_hat)
+                        print("  ↳ wrote", out_pred)
 
-# -----------------------
-# LSTM grid → save NPZs per config
-# -----------------------
-lstm_seq_grid = [15, 20]
-lstm_hs_grid  = [64, 128]
+                    # (4) Hidden SIMULATION export (skip=50)
+                    if hidden_sim is not None and "u" in hidden_sim and "th" in hidden_sim:
+                        u_test = hidden_sim["u"].astype(np.float32)
+                        th_test_init = hidden_sim["th"].astype(np.float32)
+                        th_sim = simulation_IO_model(_mlp_fn, list(u_test), list(th_test_init), skip=WARMUP, na=na, nb=nb)
+                        out_sim = f"disc-submission-files/grid/ann-narx_hidden-simulation_{tag}.npz"
+                        np.savez(out_sim, th=th_sim, u=u_test)
+                        print("  ↳ wrote", out_sim)
+
+# ============================================================
+# LSTM GRID  (seq_len fixed to 15 to match hidden prediction histories)
+# ============================================================
+lstm_seq_len = 15  # hidden prediction has 15 past samples
+lstm_hs_grid  = [32, 64]
 lstm_nl_grid  = [1, 2]
 lstm_bi_grid  = [False, True]
 
-print("\n=== LSTM grid (saving checker-ready files per config) ===")
-for seq_len in lstm_seq_grid:
-    Xtr_np, Ytr_np = create_lstm_sequences(u_tr, th_tr, seq_len)
-    Xva_np, Yva_np = create_lstm_sequences(u_va, th_va, seq_len)
-    Xte_np, Yte_np = create_lstm_sequences(u_te, th_te, seq_len)
-    if len(Xtr_np) < 100 or len(Xte_np) < 10:
-        print(f"skip LSTM seq={seq_len} (too few samples)"); continue
+print("\n=== LSTM (seq_len=15, features=[u,y]) ===")
+Xtrain_seq, Ytrain_seq = create_lstm_sequences(u, th, lstm_seq_len)
 
-    for hs in lstm_hs_grid:
-        for nl in lstm_nl_grid:
-            for bi in lstm_bi_grid:
-                tag = f"seq{seq_len}_hs{hs}_nl{nl}_bi{int(bi)}"
-                print(f"  LSTM [{tag}]")
-                model = LSTMHead(input_size=3, hidden_size=hs, num_layers=nl, bidirectional=bi)
-                model = train_lstm(model, Xtr_np, Ytr_np, Xva_np, Yva_np)
+for hs in lstm_hs_grid:
+    for nl in lstm_nl_grid:
+        for bi in lstm_bi_grid:
+            tag = f"seq15_hs{hs}_nl{nl}_bi{int(bi)}"
+            print(f"\n[LSTM] Config: {tag}")
+            model = LSTM_Seq2One(input_size=2, hidden_size=hs, num_layers=nl, bidirectional=bi)
+            model = train_lstm(model, Xtrain_seq, Ytrain_seq, epochs=80, bs=128, lr=1e-3)
 
-                # (A) TEST prediction → upast/thpast (L=15) + thnow predicted with rolling seq_len window
-                upast15, thpast15 = make_pred_windows(u_te, th_te, L=PRED_L)
-                start_k = max(PRED_L, seq_len)
-                thnow_list = []
+            # (1) TRAIN prediction metrics
+            with torch.no_grad():
+                y_pred_train = model(torch.tensor(Xtrain_seq, dtype=torch.float32, device=device)).cpu().numpy().reshape(-1)
+            print_train_pred_metrics(y_pred_train, Ytrain_seq)
+
+            # (2) TRAIN simulation metrics (skip = seq_len)
+            th_train_sim = simulate_lstm_free_run(model, list(u), list(th), seq_len=lstm_seq_len, skip=lstm_seq_len)
+            print_train_sim_metrics(th_train_sim, th, lstm_seq_len)
+
+            # (3) Hidden PREDICTION export
+            if hidden_pred is not None and "upast" in hidden_pred and "thpast" in hidden_pred:
+                up = hidden_pred["upast"].astype(np.float32)   # (N, 15)
+                tp = hidden_pred["thpast"].astype(np.float32)  # (N, 15)
+                Xh = np.stack([up, tp], axis=2)                # (N, 15, 2)
                 with torch.no_grad():
-                    u = u_te.astype(np.float32); y = th_te.astype(np.float32)
-                    s = np.sin(y); c = np.cos(y)
-                    for k in range(start_k, len(y)):
-                        Xwin = np.stack([u[k-seq_len:k], s[k-seq_len:k], c[k-seq_len:k]], axis=1)[None, ...]
-                        y_sc = model(torch.tensor(Xwin, dtype=torch.float32, device=device)).cpu().numpy()[0]
-                        thnow_list.append(np.arctan2(y_sc[0], y_sc[1]))
-                thnow = np.array(thnow_list, np.float32)
+                    y_hat = model(torch.tensor(Xh, dtype=torch.float32, device=device)).cpu().numpy().reshape(-1,1)
+                out_pred = f"disc-submission-files/grid/ann-lstm_hidden-prediction_{tag}.npz"
+                np.savez(out_pred, upast=up, thpast=tp, thnow=y_hat)
+                print("  ↳ wrote", out_pred)
 
-                # Align everything to have identical N and match solution length if present
-                if pred_target_len is not None:
-                    TL = pred_target_len
-                else:
-                    TL = min(len(thnow), len(upast15) - (start_k - PRED_L))
-                thnow = thnow[:TL]
-                # shift upast/thpast to start at start_k (so windows align to thnow indices)
-                upast15  = upast15[(start_k - PRED_L):(start_k - PRED_L) + TL]
-                thpast15 = thpast15[(start_k - PRED_L):(start_k - PRED_L) + TL]
+            # (4) Hidden SIMULATION export (skip=50)
+            if hidden_sim is not None and "u" in hidden_sim and "th" in hidden_sim:
+                u_test = hidden_sim["u"].astype(np.float32)
+                th_test_init = hidden_sim["th"].astype(np.float32)
+                th_sim = simulate_lstm_free_run(model, list(u_test), list(th_test_init), seq_len=lstm_seq_len, skip=WARMUP)
+                out_sim = f"disc-submission-files/grid/ann-lstm_hidden-simulation_{tag}.npz"
+                np.savez(out_sim, th=th_sim, u=u_test)
+                print("  ↳ wrote", out_sim)
 
-                pred_out = f"disc-submission-files/grid/ann-lstm_test-prediction_{tag}.npz"
-                np.savez(pred_out, upast=upast15, thpast=thpast15, thnow=thnow.reshape(-1,1))
-
-                # (B) TEST simulation: free-run over full test series with WARMUP
-                th_test_sim = simulate_lstm(list(u_te), list(th_te), model, seq_len)
-                th_test_sim = align_length(th_test_sim, sim_target_len)
-                sim_out = f"disc-submission-files/grid/ann-lstm_test-simulation_{tag}.npz"
-                np.savez(sim_out, th=th_test_sim)
-
-                print(f"    ↳ wrote {os.path.basename(pred_out)} and {os.path.basename(sim_out)}")
-
-print("\nDone. Checker examples:")
-print("  python submission-file-checker.py disc-submission-files/grid/ann-narx_test-simulation_na5_nb3_hl1_hn64_actrelu.npz disc-benchmark-files/test-simulation-solution-file.npz")
-print("  python submission-file-checker.py disc-submission-files/grid/ann-narx_test-prediction_na5_nb3_hl1_hn64_actrelu.npz disc-benchmark-files/test-prediction-solution-file.npz")
+print("\nDone.")
