@@ -1,30 +1,38 @@
-# GP_torch.py — SVGP NARX with sin/cos features, wrapped RMSE, ARD RBF, X-normalization
-# Minimal + clean: for EACH grid config, write two checker-friendly NPZs:
-#   - disc-submission-files/grid/gp_test-simulation_M{M}_na{na}_nb{nb}.npz  (key: 'th')
-#   - disc-submission-files/grid/gp_test-prediction_M{M}_na{na}_nb{nb}.npz   (key: 'thnow')
-# The file lengths are aligned to the course solution files if present:
-#   disc-benchmark-files/test-simulation-solution-file.npz  (key: 'th')
-#   disc-benchmark-files/test-prediction-solution-file.npz  (key: 'thnow')
+# GP_torch_optuna.py
+# SVGP (GPyTorch) for NARX with sin/cos features + Optuna HPO
+# - Prints TRAIN prediction/simulation errors in the exact ANN format
+# - Optimizes (na, nb, inducing M, lr, epochs, batch_size) by minimizing VAL free-run RMSE (wrapped)
+# - Retrains best config on train+val and writes checker-ready NPZs on TEST split:
+#       disc-submission-files/gp_optuna_test-simulation_M{M}_na{na}_nb{nb}.npz   (key: 'th')
+#       disc-submission-files/gp_optuna_test-prediction_M{M}_na{na}_nb{nb}.npz   (key: 'thnow')
 
 import os
+import math
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import gpytorch
+import optuna
 
 # -------------------------
-# Config
+# Constants / I/O
 # -------------------------
-WARMUP = 50  # warmup samples for free-run sim
+WARMUP = 50  # warmup samples used for free-run simulation
+SAVE_DIR = "disc-submission-files"
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 # -------------------------
-# Utils
+# Utilities
 # -------------------------
-def to_tensor(x, device): 
+def to_tensor(x, device):
     return torch.as_tensor(x, dtype=torch.float32, device=device)
 
 def wrap_angle(a):
     return (np.asarray(a) + np.pi) % (2*np.pi) - np.pi
+
+def rmse(a, b):
+    a = np.asarray(a).reshape(-1); b = np.asarray(b).reshape(-1)
+    return float(np.sqrt(np.mean((a - b) ** 2)))
 
 def rmse_wrap(a, b):
     e = wrap_angle(a) - wrap_angle(b)
@@ -45,41 +53,9 @@ def standardize_X(X, mu=None, sig=None):
         sig = X.std(0) + 1e-12
     return (X - mu) / sig, mu, sig
 
-def simulate_narx_model(u_sequence, y_initial, gp_model, likelihood, na, nb, device, x_mu, x_sig):
-    """Free-run sim with sin/cos features; uses first WARMUP samples from y_initial as warm-up."""
-    with torch.no_grad(), gpytorch.settings.fast_pred_var():
-        y_initial = np.asarray(y_initial, dtype=np.float32)
-        u_sequence = np.asarray(u_sequence, dtype=np.float32)
-
-        y_sim = list(y_initial[:WARMUP].copy())
-        upast = list(u_sequence[WARMUP - nb:WARMUP].copy())
-        ypast = y_sim[-na:].copy()
-
-        for u_now in u_sequence[WARMUP:]:
-            sin_blk = np.sin(np.array(ypast[-na:], dtype=np.float32))
-            cos_blk = np.cos(np.array(ypast[-na:], dtype=np.float32))
-            x = np.concatenate([np.array(upast[-nb:], dtype=np.float32), sin_blk, cos_blk])[None, :]
-            x = (x - x_mu) / x_sig
-            pred = likelihood(gp_model(to_tensor(x, device)))
-            mean = pred.mean.item()
-            upast.append(float(u_now)); upast.pop(0)
-            ypast.append(mean);         ypast.pop(0)
-            y_sim.append(mean)
-    return np.array(y_sim, dtype=np.float32)
-
-def maybe_kmeans_Z(X, M, device, seed=0):
-    try:
-        from sklearn.cluster import KMeans
-        kmeans = KMeans(n_clusters=M, n_init=10, random_state=seed).fit(X)
-        Z = torch.tensor(kmeans.cluster_centers_, dtype=torch.float32, device=device)
-    except Exception:
-        perm = torch.randperm(X.shape[0], device=device)[:M]
-        Z = torch.tensor(X[perm.cpu().numpy()], dtype=torch.float32, device=device)
-    return Z
-
 def align_length(arr, target_len):
-    """Crop or pad (edge) to match target_len."""
-    arr = np.asarray(arr)
+    """Crop or pad (edge) to match target_len, if provided."""
+    arr = np.asarray(arr).reshape(-1)
     if target_len is None:
         return arr
     L = len(arr)
@@ -87,12 +63,21 @@ def align_length(arr, target_len):
         return arr
     if L > target_len:
         return arr[:target_len]
-    # pad with edge value to avoid introducing artifacts
     pad_val = arr[-1] if L > 0 else 0.0
     return np.pad(arr, (0, target_len - L), mode="edge", constant_values=pad_val)
 
+def maybe_kmeans_Z(X, M, device, seed=0):
+    try:
+        from sklearn.cluster import KMeans
+        km = KMeans(n_clusters=M, n_init=10, random_state=seed).fit(X)
+        Z = torch.tensor(km.cluster_centers_, dtype=torch.float32, device=device)
+    except Exception:
+        perm = torch.randperm(X.shape[0], device=device)[:M]
+        Z = torch.tensor(X[perm.cpu().numpy()], dtype=torch.float32, device=device)
+    return Z
+
 # -------------------------
-# SVGP model
+# GPyTorch SVGP
 # -------------------------
 class NARXSVGP(gpytorch.models.ApproximateGP):
     def __init__(self, inducing_points, input_dim):
@@ -137,15 +122,53 @@ def predict_svgp(model, likelihood, X, device="cpu", batch_size=4096):
         means.append(pred.mean.detach().cpu())
     return torch.cat(means, dim=0).numpy()
 
+def simulate_narx_model(u_sequence, y_initial, gp_model, likelihood, na, nb, device, x_mu, x_sig, skip=WARMUP):
+    """Free-run sim with sin/cos; 'skip' controls warm-up length."""
+    with torch.no_grad(), gpytorch.settings.fast_pred_var():
+        y_initial = np.asarray(y_initial, dtype=np.float32)
+        u_sequence = np.asarray(u_sequence, dtype=np.float32)
+
+        y_sim = list(y_initial[:skip].copy())
+        upast = list(u_sequence[skip - nb:skip].copy())
+        ypast = y_sim[-na:].copy()
+
+        for u_now in u_sequence[skip:]:
+            sin_blk = np.sin(np.array(ypast[-na:], dtype=np.float32))
+            cos_blk = np.cos(np.array(ypast[-na:], dtype=np.float32))
+            x = np.concatenate([np.array(upast[-nb:], dtype=np.float32), sin_blk, cos_blk])[None, :]
+            x = (x - x_mu) / x_sig
+            pred = likelihood(gp_model(to_tensor(x, device)))
+            mean = float(pred.mean.item())
+            upast.append(float(u_now)); upast.pop(0)
+            ypast.append(mean);         ypast.pop(0)
+            y_sim.append(mean)
+    return np.array(y_sim, dtype=np.float32)
+
 # -------------------------
-# Main
+# Pretty training prints (exact format)
+# -------------------------
+def print_train_prediction_metrics(y_pred_train, Ytrain):
+    RMS = rmse(y_pred_train, Ytrain)
+    print('train prediction errors:')
+    print('RMS:', RMS, 'radians')
+    print('RMS:', RMS/(2*np.pi)*360, 'degrees')
+    print('NRMS:', RMS/np.std(Ytrain)*100, '%')
+
+def print_train_simulation_metrics(th_sim, th_true, skip):
+    err = th_sim[skip:] - th_true[skip:]
+    RMS = float(np.sqrt(np.mean(err**2)))
+    print('train simulation errors:')
+    print('RMS:', RMS, 'radians')
+    print('RMS:', RMS/(2*np.pi)*360, 'degrees')
+    print('NRMS:', RMS/np.std(th_true)*100, '%')
+
+# -------------------------
+# Main + Optuna objective
 # -------------------------
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    os.makedirs("disc-submission-files/grid", exist_ok=True)
-
-    # Load base data (train/val/test split)
+    # Load data
     data = np.load('disc-benchmark-files/training-val-test-data.npz')
     th_all = data['th'].astype(np.float32)
     u_all  = data['u'].astype(np.float32)
@@ -155,69 +178,126 @@ def main():
     th_tr, th_va, th_te = th_all[:i_tr], th_all[i_tr:i_va], th_all[i_va:]
     u_tr,  u_va,  u_te  = u_all[:i_tr],  u_all[i_tr:i_va],  u_all[i_va:]
 
-    # If solution files exist, grab their target lengths to align shapes for the checker
-    sim_sol_path = 'disc-benchmark-files/test-simulation-solution-file.npz'
+    # Solution lengths (optional; align NPZ sizes if present)
+    sim_sol_path  = 'disc-benchmark-files/test-simulation-solution-file.npz'
     pred_sol_path = 'disc-benchmark-files/test-prediction-solution-file.npz'
-    sim_target_len = None
-    pred_target_len = None
-    if os.path.exists(sim_sol_path):
-        sim_target_len = np.load(sim_sol_path)['th'].reshape(-1).shape[0]
-    if os.path.exists(pred_sol_path):
-        pred_target_len = np.load(pred_sol_path)['thnow'].reshape(-1).shape[0]
+    sim_target_len  = np.load(sim_sol_path)['th'].size      if os.path.exists(sim_sol_path)  else None
+    pred_target_len = np.load(pred_sol_path)['thnow'].size  if os.path.exists(pred_sol_path) else None
 
-    # Grid
-    na_grid = [2, 5, 8]
-    nb_grid = [2, 5, 8]
-    M_grid  = [300, 100, 50]
+    # ----------------- Optuna objective -----------------
+    best_snapshot = {"val_sim_rmse": float("inf")}  # we’ll also keep last trained model for preview
 
-    print("\n=== Grid Search (saving checker-ready NPZs per config) ===")
-    for M in M_grid:
-        for na in na_grid:
-            for nb in nb_grid:
-                # Build datasets
-                Xtr, ytr = construct_io_dataset(u_tr, th_tr, na, nb)
-                Xva, yva = construct_io_dataset(u_va, th_va, na, nb)
-                Xte, yte = construct_io_dataset(u_te, th_te, na, nb)
-                if len(Xtr) < 100 or len(Xva) < 100 or len(Xte) < 10:
-                    print(f"⚠ Skip M={M}, na={na}, nb={nb} (too few samples)"); 
-                    continue
+    def objective(trial: optuna.Trial) -> float:
+        # Hyperparams
+        na = trial.suggest_categorical("na", [2, 4, 5, 6, 8, 10, 12])
+        nb = trial.suggest_categorical("nb", [2, 4, 5, 6, 8, 10, 12])
+        M  = trial.suggest_categorical("M",  [50, 100, 200, 300])
+        lr = trial.suggest_float("lr", 1e-3, 3e-2, log=True)
+        epochs = trial.suggest_int("epochs", 60, 140, step=20)
+        batch_size = trial.suggest_categorical("batch_size", [512, 1024, 2048])
 
-                # Normalize X
-                Xtr_n, x_mu, x_sig = standardize_X(Xtr)
-                Xva_n, _, _        = standardize_X(Xva, x_mu, x_sig)
-                Xte_n, _, _        = standardize_X(Xte, x_mu, x_sig)
+        # Build datasets
+        Xtr, Ytr = construct_io_dataset(u_tr, th_tr, na, nb)
+        Xva, Yva = construct_io_dataset(u_va, th_va, na, nb)
+        if len(Xtr) < 100 or len(Xva) < 50:
+            return 1e9  # invalid config given data size
 
-                # Train
-                train_loader = DataLoader(TensorDataset(to_tensor(Xtr_n, device), to_tensor(ytr, device)),
-                                          batch_size=2048, shuffle=True)
-                Z = maybe_kmeans_Z(Xtr_n, M, device, seed=0)
-                model = NARXSVGP(Z, input_dim=Xtr_n.shape[1]).to(device)
-                likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
-                train_svgp(model, likelihood, train_loader, epochs=60, lr=0.01, device=device)
+        # Normalize features on TRAIN
+        Xtr_n, x_mu, x_sig = standardize_X(Xtr)
+        Xva_n, _, _        = standardize_X(Xva, x_mu, x_sig)
 
-                # Val metrics (for logging only)
-                yva_hat = predict_svgp(model, likelihood, to_tensor(Xva_n, device), device=device)
-                pred_rmse = rmse_wrap(yva_hat, yva)
-                sim_va = simulate_narx_model(u_va, th_va, model, likelihood, na, nb, device, x_mu, x_sig)
-                sim_rmse = rmse_wrap(sim_va, th_va)
-                print(f"[Grid] M={M:4d}, na={na:2d}, nb={nb:2d} | ValPredRMSE(wrap)={pred_rmse:.4f} | ValSimRMSE(wrap)={sim_rmse:.4f}")
+        # DataLoader
+        train_loader = DataLoader(TensorDataset(to_tensor(Xtr_n, device), to_tensor(Ytr, device)),
+                                  batch_size=batch_size, shuffle=True, drop_last=False)
 
-                # -------- Build TEST submissions (checker expects specific keys) --------
-                # (A) Simulation submission on test split: free-run using u_te + warmup th_te[:WARMUP]
-                th_test_sim = simulate_narx_model(u_te, th_te, model, likelihood, na, nb, device, x_mu, x_sig)
-                th_test_sim = align_length(th_test_sim, sim_target_len)
-                sim_out_path = f"disc-submission-files/grid/gp_test-simulation_M{M}_na{na}_nb{nb}.npz"
-                np.savez(sim_out_path, th=th_test_sim)
+        # Model
+        Z = maybe_kmeans_Z(Xtr_n, M, device, seed=0)
+        model = NARXSVGP(Z, input_dim=Xtr_n.shape[1]).to(device)
+        likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
 
-                # (B) Prediction submission on test split: one-step using Xte_n
-                yte_hat = predict_svgp(model, likelihood, to_tensor(Xte_n, device), device=device).reshape(-1)
-                # align to solution's thnow length if known
-                yte_hat = align_length(yte_hat, pred_target_len)
-                pred_out_path = f"disc-submission-files/grid/gp_test-prediction_M{M}_na{na}_nb{nb}.npz"
-                np.savez(pred_out_path, thnow=yte_hat.reshape(-1, 1))
+        # Train
+        train_svgp(model, likelihood, train_loader, epochs=epochs, lr=lr, device=device)
 
-                print(f"  ↳ wrote: {sim_out_path}")
-                print(f"  ↳ wrote: {pred_out_path}")
+        # ---------- TRAIN prints (exact format) ----------
+        with torch.no_grad():
+            y_pred_train = predict_svgp(model, likelihood, to_tensor(Xtr_n, device), device=device).reshape(-1)
+        print_train_prediction_metrics(y_pred_train, Ytr)
+
+        skip_train = max(na, nb)
+        th_train_sim = simulate_narx_model(u_tr, th_tr, model, likelihood, na, nb, device, x_mu, x_sig, skip=skip_train)
+        print_train_simulation_metrics(th_train_sim, th_tr, skip_train)
+
+        # ---------- VALIDATION objective (wrapped sim RMSE) ----------
+        # (more robust for angles than plain RMSE)
+        sim_va = simulate_narx_model(u_va, th_va, model, likelihood, na, nb, device, x_mu, x_sig, skip=max(na, nb))
+        val_sim_rmse = rmse_wrap(sim_va, th_va)
+
+        # Track best-by-val-sim
+        if val_sim_rmse < best_snapshot["val_sim_rmse"]:
+            best_snapshot.update({
+                "val_sim_rmse": val_sim_rmse,
+                "na": na, "nb": nb, "M": M, "lr": lr, "epochs": epochs, "batch_size": batch_size,
+                "x_mu": x_mu.copy(), "x_sig": x_sig.copy(),
+                "state_dict": {k: v.detach().cpu().clone() for k, v in model.state_dict().items()},
+                "lik_state":   {k: v.detach().cpu().clone() for k, v in likelihood.state_dict().items()},
+            })
+
+        return val_sim_rmse
+
+    # ----------------- Run study -----------------
+    study = optuna.create_study(direction="minimize")
+    # NOTE: adjust n_trials to your budget
+    study.optimize(objective, n_trials=20, show_progress_bar=True)
+
+    best = study.best_trial.params
+    print("\n=== Optuna best (by VAL wrapped Sim RMSE) ===")
+    print(best, "| value:", study.best_value)
+
+    # ----------------- Retrain on TRAIN+VAL with best config -----------------
+    na = best["na"]; nb = best["nb"]; M = best["M"]
+    lr = best["lr"]; epochs = best["epochs"]; batch_size = best["batch_size"]
+
+    # Merge train+val
+    th_trv = np.concatenate([th_tr, th_va], axis=0)
+    u_trv  = np.concatenate([u_tr,  u_va],  axis=0)
+
+    Xtrv, Ytrv = construct_io_dataset(u_trv, th_trv, na, nb)
+    Xte,  Yte  = construct_io_dataset(u_te,  th_te,  na, nb)
+    Xtrv_n, x_mu, x_sig = standardize_X(Xtrv)
+    Xte_n,  _, _        = standardize_X(Xte,  x_mu, x_sig)
+
+    train_loader = DataLoader(TensorDataset(to_tensor(Xtrv_n, device), to_tensor(Ytrv, device)),
+                              batch_size=batch_size, shuffle=True, drop_last=False)
+    Z = maybe_kmeans_Z(Xtrv_n, M, device, seed=0)
+    model = NARXSVGP(Z, input_dim=Xtrv_n.shape[1]).to(device)
+    likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
+    train_svgp(model, likelihood, train_loader, epochs=epochs, lr=lr, device=device)
+
+    # ----------------- Final TRAIN prints (on TRAIN+VAL, matching your format) -----------------
+    with torch.no_grad():
+        y_pred_trv = predict_svgp(model, likelihood, to_tensor(Xtrv_n, device), device=device).reshape(-1)
+    print_train_prediction_metrics(y_pred_trv, Ytrv)
+
+    skip_trv = max(na, nb)
+    th_trv_sim = simulate_narx_model(u_trv, th_trv, model, likelihood, na, nb, device, x_mu, x_sig, skip=skip_trv)
+    print_train_simulation_metrics(th_trv_sim, th_trv, skip_trv)
+
+    # ----------------- TEST submissions (checker-ready) -----------------
+    # (A) Simulation on test split (free-run from first WARMUP truth samples)
+    th_test_sim = simulate_narx_model(u_te, th_te, model, likelihood, na, nb, device, x_mu, x_sig, skip=WARMUP)
+    th_test_sim = align_length(th_test_sim, sim_target_len)
+    sim_out = os.path.join(SAVE_DIR, f"gp_optuna_test-simulation_M{M}_na{na}_nb{nb}.npz")
+    np.savez(sim_out, th=th_test_sim)
+
+    # (B) Prediction on test split (one-step using IO features)
+    yte_hat = predict_svgp(model, likelihood, to_tensor(Xte_n, device), device=device).reshape(-1)
+    yte_hat = align_length(yte_hat, pred_target_len)
+    pred_out = os.path.join(SAVE_DIR, f"gp_optuna_test-prediction_M{M}_na{na}_nb{nb}.npz")
+    np.savez(pred_out, thnow=yte_hat.reshape(-1, 1))
+
+    print(f"\nWrote best NPZs:")
+    print("  ", sim_out)
+    print("  ", pred_out)
 
 if __name__ == "__main__":
     main()
