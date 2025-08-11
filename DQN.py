@@ -252,14 +252,14 @@ def objective(trial):
     policy_kwargs = dict(net_arch=net_arch_cfg, activation_fn=nn.ReLU)
 
     # no rendering during training/eval
-    env = Monitor(TimeLimit(DQN_UnbalancedDisk(n_actions=n_actions, render_mode=None), max_episode_steps=600))
-    eval_env = Monitor(TimeLimit(DQN_UnbalancedDisk(n_actions=n_actions, render_mode=None), max_episode_steps=600))
+    env = Monitor(TimeLimit(DQN_UnbalancedDisk(n_actions=n_actions, render_mode=None), max_episode_steps=400))
+    eval_env = Monitor(TimeLimit(DQN_UnbalancedDisk(n_actions=n_actions, render_mode=None), max_episode_steps=400))
 
     stop_cb = StopTrainingOnMaxEpisodes(max_episodes=150, verbose=1)
     eval_cb = EvalCallback(
         eval_env,
         best_model_save_path=f"optuna_dqn_trials/trial_{trial.number}",
-        eval_freq=5000,
+        eval_freq=20000,
         deterministic=True,
         render=False,
     )
@@ -279,7 +279,7 @@ def objective(trial):
         seed=88,
     )
 
-    model.learn(total_timesteps=100_000, callback=callback)
+    model.learn(total_timesteps=30_000, callback=callback)
 
     return eval_cb.best_mean_reward
 
@@ -287,7 +287,7 @@ def objective(trial):
 if __name__ == "__main__":
     # === Run Optuna Study ===
     study = optuna.create_study(direction="maximize", sampler=TPESampler(), pruner=MedianPruner())
-    study.optimize(objective, n_trials=20)
+    study.optimize(objective, n_trials=6)
 
     print("Best trial value:", study.best_trial.value)
     print("Best hyperparameters:", study.best_trial.params)
