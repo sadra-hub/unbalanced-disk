@@ -41,17 +41,22 @@ def create_IO_data(u, y, na, nb):
     return np.array(X, np.float32), np.array(Y, np.float32)
 
 def simulation_IO_model(predict_fn, ulist, ylist, skip=50, na=1, nb=1):
-    # Exactly like the example: warm up with 'skip' true outputs, then free-run
-    upast = ulist[skip-nb:skip].tolist()
-    ypast = ylist[skip-na:skip].tolist()
-    Y = ylist[:skip].tolist()
-    for u in ulist[skip:]:
-        x = np.concatenate([upast, ypast], axis=0)
-        ypred = float(predict_fn(x[None, :]))
+    uarr = np.asarray(ulist, dtype=np.float32).reshape(-1)
+    yarr = np.asarray(ylist, dtype=np.float32).reshape(-1)
+
+    upast = uarr[skip - nb:skip].tolist()
+    ypast = yarr[skip - na:skip].tolist()
+    Y     = yarr[:skip].tolist()
+
+    for u_now in uarr[skip:]:
+        x = np.asarray(upast + ypast, dtype=np.float32)[None, :]
+        ypred = float(predict_fn(x))
         Y.append(ypred)
-        upast.append(float(u)); upast.pop(0)
-        ypast.append(ypred);   ypast.pop(0)
-    return np.array(Y, np.float32)
+
+        upast.append(float(u_now)); upast.pop(0)
+        ypast.append(ypred);       ypast.pop(0)
+
+    return np.asarray(Y, dtype=np.float32)
 
 # -----------------------
 # Models
