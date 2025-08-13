@@ -35,10 +35,10 @@ LOG_REF     = "disc-benchmark-files/expert-log-reference-tracking.csv"    # t,th
 HIST_LEN = 10
 
 MAX_EP_STEPS   = 600
-N_TRIALS        = 4
-TOTAL_TIMESTEPS = 30_000
-EVAL_FREQ       = 20_000
-N_EVAL_EPISODES = 3
+N_TRIALS        = 10
+TOTAL_TIMESTEPS = 100_000
+EVAL_FREQ       = 5_000
+N_EVAL_EPISODES = 5
 
 SAVE_DIR = "disc-submission-files"
 TRIAL_DIR = "optuna_sac_trials"
@@ -57,7 +57,7 @@ class UnbalancedDisk(gym.Env):
     '''
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, umax=3., dt=0.025, render_mode=None, hist_len=HIST_LEN):
+    def __init__(self, umax=3., dt=0.005, render_mode=None, hist_len=HIST_LEN):
         ############# start do not edit  ################
         self.omega0 = 11.339846957335382
         self.delta_th = 0
@@ -210,7 +210,7 @@ def make_u_hist_matrix(u, hist_len):
         U[k, :] = hist
     return U  # shape (N, H)
 
-def sample_random_negatives(N, umax=3.0, dt=0.025, max_ep_steps=600, seed=SEED+1, hist_len=HIST_LEN):
+def sample_random_negatives(N, umax=3.0, dt=0.005, max_ep_steps=600, seed=SEED+1, hist_len=HIST_LEN):
     rng = np.random.default_rng(seed)
     env = UnbalancedDisk(umax=umax, dt=dt, render_mode=None, hist_len=hist_len)
     ths, oms, us = [], [], []
@@ -252,7 +252,7 @@ def build_feature_matrix_seq(th, om, u, hist_len):
         feats[k, :] = phi_features_seq(th[k], om[k], Uhist[k])
     return feats
 
-def train_irl_from_expert(csv_path, umax=3.0, dt=0.025, max_ep_steps=600, device="cpu", hist_len=HIST_LEN):
+def train_irl_from_expert(csv_path, umax=3.0, dt=0.005, max_ep_steps=600, device="cpu", hist_len=HIST_LEN):
     # Expert positives
     th_e, om_e, u_e = load_expert(csv_path)
     N = int(min(th_e.shape[0], 40_000))
@@ -297,7 +297,7 @@ def train_irl_from_expert(csv_path, umax=3.0, dt=0.025, max_ep_steps=600, device
 # SAC wrapper with IRL (sequence reward)
 # =========================
 class SAC_UnbalancedDisk(UnbalancedDisk):
-    def __init__(self, w, b, phi_mean, phi_std, hist_len=HIST_LEN, umax=3.0, dt=0.025, render_mode=None):
+    def __init__(self, w, b, phi_mean, phi_std, hist_len=HIST_LEN, umax=3.0, dt=0.005, render_mode=None):
         super().__init__(umax=umax, dt=dt, render_mode=render_mode, hist_len=hist_len)
 
         # SAC expects a 1D Box action
