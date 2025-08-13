@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>TU/e Unbalanced Disk — Keyboard Demo</title>
+<style>
+  :root{
+    --bg:#0f172a; --panel:#111827; --card:#0b1220; --ink:#e5e7eb; --muted:#9ca3af; --prim:#ef4444; --acc:#60a5fa; --ok:#22c55e; --warn:#f59e0b;
+  }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1100px;margin:24px auto;padding:0 16px;display:grid;grid-template-columns:360px 1fr;gap:16px}
+  header{grid-column:1/-1;display:flex;align-items:center;gap:14px;margin-bottom:4px}
+  .logo{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,#e11d48,#f97316);}
+  .logo b{font-size:20px;color:#fff;letter-spacing:.5px}
+  h1{margin:0;font-size:20px}
+  .muted{color:var(--muted)}
+  .card{background:var(--card);border:1px solid #1f2937;border-radius:14px;padding:14px}
+  .controls .row{display:grid;grid-template-columns:120px 1fr auto;gap:8px;align-items:center;margin:8px 0}
+  .controls label{color:#d1d5db}
+  .controls input[type="range"]{width:100%}
+  .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  button{background:#1f2937;border:1px solid #334155;color:#e5e7eb;border-radius:10px;padding:8px 12px;cursor:pointer}
+  button.primary{background:var(--prim);border-color:#b91c1c}
+  button.good{background:var(--ok);border-color:#15803d}
+  button.warn{background:var(--warn);border-color:#d97706}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .status{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:8px}
+  .stat{background:#0a1020;border:1px solid #1e293b;border-radius:12px;padding:10px}
+  .stat b{display:block;font-size:12px;color:var(--muted)}
+  .stat .v{font-size:16px}
+  .canvasWrap{position:relative}
+  canvas{width:100%;max-width:680px;aspect-ratio:1;border-radius:16px;background:#0a0f1a;border:1px solid #1e2a3a;display:block}
+  .legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px}
+  .dot{display:inline-flex;align-items:center;gap:6px}
+  .dot i{display:inline-block;width:10px;height:10px;border-radius:999px}
+  .dot .ref{background:var(--acc)}
+  .dot .disk{background:#fca5a5}
+  .dot .torque{background:var(--prim)}
+  .foot{grid-column:1/-1;color:var(--muted);margin:10px 0}
+  .small{font-size:12px}
+  .hl{color:#fff}
+  .kbd{padding:1px 6px;border:1px solid #334155;border-radius:6px;background:#0b1220;color:#e5e7eb}
+  .link{color:#93c5fd;text-decoration:none}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <span class="logo"><b>TU/e</b></span>
+      <div>
+        <h1>Unbalanced Disk — Browser Playground</h1>
+        <div class="muted small">Keyboard: <span class="kbd">←</span>/<span class="kbd">A</span> = negative torque, <span class="kbd">→</span>/<span class="kbd">D</span> = positive, <span class="kbd">Space</span> = zero, <span class="kbd">S</span> = Start, <span class="kbd">P</span> = Pause</div>
+      </div>
+    </header>
+
+    <!-- Controls -->
+    <section class="card controls">
+      <div class="row">
+        <label>Mode</label>
+        <div>
+          <label><input type="radio" name="mode" value="upright" checked> No tracking (upright)</label><br/>
+          <label><input type="radio" name="mode" value="tracking"> Tracking (oscillating ref)</label>
+        </div>
+        <div></div>
+      </div>
+
+      <div class="row">
+        <label>Ref amplitude</label>
+        <input id="amp" type="range" min="0" max="90" step="1" value="25">
+        <div><span id="ampv">25</span>°</div>
+      </div>
+
+      <div class="row">
+        <label>dt (s)</label>
+        <input id="dt" type="range" min="0.005" max="0.05" step="0.001" value="0.025">
+        <div><span id="dtv">0.025</span></div>
+      </div>
+
+      <div class="row">
+        <label>Difficulty</label>
+        <select id="diff">
+          <option value="easy">Easy (20°)</option>
+          <option value="med" selected>Medium (10°)</option>
+          <option value="hard">Hard (5°)</option>
+        </select>
+        <div id="diffv">threshold = 10°</div>
+      </div>
+
+      <div class="btns">
+        <button id="start" class="primary">Start (20s)</button>
+        <button id="pause" class="">Pause</button>
+        <button id="reset">Reset</button>
+        <button id="download" class="good">Download all logs (.zip)</button>
+        <button id="clear" class="warn">Clear highscores</button>
+      </div>
+
+      <div class="status">
+        <div class="stat"><b>Time</b> <span class="v"><span id="time">0.00</span> / 20.00 s</span></div>
+        <div class="stat"><b>Score (time within threshold)</b> <span class="v"><span id="score">0.00</span> s</span></div>
+        <div class="stat"><b>θ (deg)</b> <span class="v" id="th">0.00</span></div>
+        <div class="stat"><b>ω (rad/s)</b> <span class="v" id="om">0.00</span></div>
+        <div class="stat"><b>u (Nm)</b> <span class="v" id="uu">0.00</span></div>
+        <div class="stat"><b>|θ−θ<sub>ref</sub>| (deg)</b> <span class="v" id="err">0.00</span></div>
+        <div class="stat"><b>Mode</b> <span class="v" id="modev">upright</span></div>
+        <div class="stat"><b>Best score</b> <span class="v" id="best">—</span></div>
+      </div>
+    </section>
+
+    <!-- Canvas -->
+    <section class="card canvasWrap">
+      <canvas id="cv" width="680" height="680"></canvas>
+      <div class="legend">
+        <span class="dot"><i class="disk"></i> disk mass</span>
+        <span class="dot"><i class="ref"></i> reference</span>
+        <span class="dot"><i class="torque"></i> torque bar</span>
+      </div>
+    </section>
+
+    <footer class="foot small">
+      TU/e visual is a stylized text mark in this demo. Dynamics integrated with RK4. Logs saved to memory and downloadable as a ZIP. Works locally and on GitHub Pages.  
+      Tip: If the page doesn’t capture keys, click the canvas once. 
+    </footer>
+  </div>
+
+<!-- JSZip (CDN) for zipping logs) -->
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script>
+/* ============ Physics (Unbalanced Disk) ============ */
+const PARAMS = {
+  omega0: 11.339846957335382,
+  delta_th: 0.0,
+  gamma: 1.3328339309394384,
+  Ku: 28.136158407237073,
+  Fc: 6.062729509386865,
+  coulomb_omega: 0.001,
+  umax: 3.0
+};
+function wrapToPi(x){ return ((x + Math.PI) % (2*Math.PI)) - Math.PI; }
+
+function deriv(th, om, u){
+  const {omega0, delta_th, gamma, Ku, Fc, coulomb_omega} = PARAMS;
+  const dth = om;
+  const friction = gamma*om + Fc*Math.tanh(om / coulomb_omega);
+  const dom = -omega0*omega0*Math.sin(th + delta_th) - friction + Ku*u;
+  return [dth, dom];
+}
+
+// One RK4 integration step
+function rk4Step(state, u, dt){
+  let [th, om] = state;
+  let [k1_th, k1_om] = deriv(th, om, u);
+  let [k2_th, k2_om] = deriv(th + 0.5*dt*k1_th, om + 0.5*dt*k1_om, u);
+  let [k3_th, k3_om] = deriv(th + 0.5*dt*k2_th, om + 0.5*dt*k2_om, u);
+  let [k4_th, k4_om] = deriv(th + dt*k3_th, om + dt*k3_om, u);
+
+  th += dt*(k1_th + 2*k2_th + 2*k3_th + k4_th)/6.0;
+  om += dt*(k1_om + 2*k2_om + 2*k3_om + k4_om)/6.0;
+  return [th, om];
+}
+
+/* ============ UI elements ============ */
+const el = (id)=>document.getElementById(id);
+const cv = el('cv'), ctx = cv.getContext('2d');
+const amp = el('amp'), ampv = el('ampv');
+const dtSlider = el('dt'), dtv = el('dtv');
+const diffSel = el('diff'), diffv = el('diffv');
+const startBtn = el('start'), pauseBtn = el('pause'), resetBtn=el('reset');
+const dlBtn = el('download'), clearBtn = el('clear');
+
+const timeEl = el('time'), scoreEl=el('score'), thEl=el('th'), omEl=el('om'), uuEl=el('uu'), errEl=el('err'), modeEl=el('modev'), bestEl=el('best');
+
+let mode = 'upright';
+document.querySelectorAll('input[name="mode"]').forEach(r=>{
+  r.addEventListener('change', ()=>{ mode = document.querySelector('input[name="mode"]:checked').value; modeEl.textContent = mode; });
+});
+
+amp.addEventListener('input', ()=>ampv.textContent = amp.value);
+dtSlider.addEventListener('input', ()=>dtv.textContent = (+dtSlider.value).toFixed(3));
+function threshDeg(){
+  return diffSel.value==='easy' ? 20 : (diffSel.value==='hard' ? 5 : 10);
+}
+diffSel.addEventListener('change', ()=> diffv.textContent = `threshold = ${threshDeg()}°`);
+diffv.textContent = `threshold = ${threshDeg()}°`;
+ampv.textContent = amp.value; dtv.textContent = (+dtSlider.value).toFixed(3);
+
+/* ============ Game state ============ */
+const ROUND_T = 20.0; // seconds
+let running = false, paused = false;
+let t = 0, th = 0, om = 0, u = 0, uCmd = 0;
+let score = 0, bestScore = loadBestScore();
+updateBestUI();
+
+let logRows = [];     // current round log
+let allLogs = [];     // all rounds this session (kept in memory)
+
+/* ============ Keyboard ============ */
+window.addEventListener('keydown', (e)=>{
+  if(e.repeat) return;
+  if(e.code==='ArrowLeft'||e.code==='KeyA'){ uCmd = -PARAMS.umax; }
+  if(e.code==='ArrowRight'||e.code==='KeyD'){ uCmd = +PARAMS.umax; }
+  if(e.code==='Space'){ uCmd = 0; }
+  if(e.code==='KeyS'){ if(!running) startRound(); else restartRound(); }
+  if(e.code==='KeyP'){ togglePause(); }
+});
+window.addEventListener('keyup', (e)=>{
+  if(e.code==='ArrowLeft'||e.code==='KeyA'){ if(uCmd<0) uCmd = 0; }
+  if(e.code==='ArrowRight'||e.code==='KeyD'){ if(uCmd>0) uCmd = 0; }
+});
+
+startBtn.onclick = ()=> { if(!running) startRound(); else restartRound(); };
+pauseBtn.onclick = ()=> togglePause();
+resetBtn.onclick = ()=> hardReset();
+clearBtn.onclick = ()=> { localStorage.removeItem('disk_best_score'); bestScore=undefined; updateBestUI(); };
+dlBtn.onclick = ()=> downloadAllLogs();
+
+/* ============ Round control ============ */
+function startRound(){
+  th = 0 + randn(0, 1e-3);
+  om = 0 + randn(0, 1e-3);
+  u = uCmd = 0;
+  score = 0; t = 0; running = true; paused = false;
+  logRows = [];
+  startBtn.textContent = 'Restart';
+  pauseBtn.textContent = 'Pause';
+}
+function restartRound(){ startRound(); }
+function togglePause(){ if(!running) return; paused = !paused; pauseBtn.textContent = paused? 'Resume':'Pause'; }
+function hardReset(){
+  running=false; paused=false; t=0; score=0; u=uCmd=0; th=0; om=0; startBtn.textContent='Start (20s)';
+}
+
+/* ============ Reference & scoring ============ */
+const REF_FREQ = 0.25; // Hz (fixed)
+function thetaRef(time){
+  if(mode==='upright') return Math.PI; // hold upright
+  const ampRad = (+amp.value) * Math.PI/180;
+  return Math.PI + ampRad*Math.sin(2*Math.PI*REF_FREQ*time);
+}
+function withinThresh(errDeg){ return Math.abs(errDeg) <= threshDeg() + 1e-9; }
+
+/* ============ Logging ============ */
+function csvEscape(s){ return (''+s).replaceAll('\n',' '); }
+function saveRoundLog(finalScore){
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[:.]/g,'-');
+  const name = `${stamp}_score-${finalScore.toFixed(3)}s_mode-${mode}_dt-${(+dtSlider.value).toFixed(3)}.csv`;
+  const header = 't,theta,omega,u,theta_ref,theta_err,mode,dt,amp_deg,threshold_deg\n';
+  const body = logRows.map(r=>r.join(',')).join('\n');
+  const csv = header + body + '\n';
+  // store
+  allLogs.push({name, csv, score:finalScore, when: now.toISOString()});
+  // best score?
+  if(bestScore===undefined || finalScore>bestScore){
+    bestScore = finalScore;
+    localStorage.setItem('disk_best_score', JSON.stringify({bestScore, time: now.toISOString(), mode}));
+    updateBestUI();
+  }
+}
+function loadBestScore(){
+  try{
+    const x = JSON.parse(localStorage.getItem('disk_best_score')||'null');
+    return x?.bestScore;
+  }catch{ return undefined; }
+}
+function updateBestUI(){
+  bestEl.textContent = (bestScore===undefined? '—' : `${bestScore.toFixed(2)} s`);
+}
+
+/* ============ Download ZIP ============ */
+async function downloadAllLogs(){
+  if(allLogs.length===0){ alert('No logs yet — play a round first!'); return; }
+  const zip = new JSZip();
+  allLogs.forEach(({name, csv})=> zip.file(name, csv));
+  // add summary JSON
+  zip.file('summary.json', JSON.stringify({
+    count: allLogs.length,
+    bestScore: bestScore??null,
+    dt: +dtSlider.value,
+    mode,
+    createdAt: new Date().toISOString()
+  }, null, 2));
+  const blob = await zip.generateAsync({type:'blob'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `unbalanced-disk-logs_${new Date().toISOString().replace(/[:.]/g,'-')}.zip`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ============ Utils ============ */
+function randn(mu=0, sigma=1){ // Box–Muller
+  let u = 1 - Math.random(); let v = Math.random();
+  return mu + sigma*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);
+}
+
+/* ============ Simulation loop ============ */
+let lastRAF = performance.now();
+function frame(now){
+  requestAnimationFrame(frame);
+  // Render at display rate; integrate at chosen dt
+  const dt = +dtSlider.value; // s
+  if(running && !paused){
+    // we integrate a single dt per RAF; if you want exact real-time pacing, accumulate time — good enough for game feel.
+    const thRef = thetaRef(t);
+    // Smooth u toward command (optional). Here direct clipping is OK.
+    u = Math.max(-PARAMS.umax, Math.min(PARAMS.umax, uCmd));
+    // Integrate
+    [th, om] = rk4Step([th, om], u, dt);
+    // Score update
+    const errDeg = Math.abs((wrapToPi(th - thRef)) * 180/Math.PI);
+    if(withinThresh(errDeg)) score += dt;
+    // Log
+    logRows.push([
+      t.toFixed(5),
+      th.toFixed(7),
+      om.toFixed(7),
+      u.toFixed(7),
+      thRef.toFixed(7),
+      (wrapToPi(th - thRef)).toFixed(7),
+      mode,
+      dt.toFixed(4),
+      (+amp.value).toFixed(1),
+      threshDeg().toFixed(1)
+    ]);
+    // Advance time
+    t += dt;
+    if(t >= ROUND_T){
+      running = false;
+      saveRoundLog(score);
+      alert(`Round finished!\nScore (time within ${threshDeg()}°): ${score.toFixed(2)} s`);
+    }
+  }
+  draw();
+}
+requestAnimationFrame(frame);
+
+/* ============ Drawing ============ */
+function draw(){
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0,0,W,H);
+  // bg
+  ctx.fillStyle = '#060912'; ctx.fillRect(0,0,W,H);
+
+  // rings
+  const cx = W/2, cy = H/2;
+  ctx.save();
+  // outer ring
+  ctx.beginPath(); ctx.arc(cx,cy, W*0.32, 0, Math.PI*2);
+  ctx.fillStyle = '#1b2942'; ctx.fill();
+  // inner hub
+  ctx.beginPath(); ctx.arc(cx,cy, W*0.03, 0, Math.PI*2);
+  ctx.fillStyle = '#7e8696'; ctx.fill();
+
+  // reference arm
+  const thRef = thetaRef(t);
+  const r = W*0.22;
+  const rx = cx - Math.sin(thRef)*r;
+  const ry = cy - Math.cos(thRef)*r;
+  ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(rx,ry); ctx.stroke();
+
+  // mass (disk offset)
+  const mx = cx - Math.sin(th)*r;
+  const my = cy - Math.cos(th)*r;
+  ctx.beginPath(); ctx.arc(mx,my, W*0.07, 0, Math.PI*2);
+  ctx.fillStyle = '#fca5a5'; ctx.fill();
+  ctx.beginPath(); ctx.arc(mx,my, W*0.012, 0, Math.PI*2);
+  ctx.fillStyle = '#222'; ctx.fill();
+
+  // torque bar
+  if(Math.abs(u) > 1e-6){
+    const un = u / PARAMS.umax; // -1..1
+    const L = Math.abs(un) * (W*0.20);
+    ctx.fillStyle = (un>0 ? '#ef4444' : '#60a5fa');
+    ctx.fillRect(cx - L/2, cy-8, L, 16);
+  }
+  ctx.restore();
+
+  // HUD numbers
+  const errDeg = Math.abs((wrapToPi(th - thRef))*180/Math.PI);
+  timeEl.textContent = t.toFixed(2);
+  scoreEl.textContent = Math.min(score, ROUND_T).toFixed(2);
+  thEl.textContent = (th*180/Math.PI).toFixed(2);
+  omEl.textContent = om.toFixed(2);
+  uuEl.textContent = u.toFixed(2);
+  errEl.textContent = errDeg.toFixed(2);
+}
+
+/* Set initial UI text */
+modeEl.textContent = mode;
+</script>
+</body>
+</html>
