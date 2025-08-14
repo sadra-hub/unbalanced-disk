@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 <title>TU/e Unbalanced Disk — Keyboard Control</title>
 <style>
   :root{
@@ -70,7 +71,7 @@
 
       <div class="row">
         <label>dt (s): <span id="dt-label">0.025</span></label>
-        <input id="dt" type="range" min="0.005" max="0.05" step="0.001" value="0.025" />
+        <input id="dt" type="range" min="0.001" max="0.050" step="0.001" value="0.025" />
       </div>
 
       <div class="row">
@@ -84,10 +85,10 @@
       <div class="hint">Arrow keys (or A/D) = torque. Z = auto-zero toggle. SPACE = pause. R = reset.</div>
 
       <div class="controls" style="margin-top:12px">
-        <button id="start" class="primary">Start (20s)</button>
-        <button id="pause">Pause</button>
-        <button id="reset">Reset</button>
-        <button id="download">Download logs (.zip)</button>
+        <button id="start" class="primary">Start<i class="material-icons">start</i></button>
+        <button id="pause"><i class="material-icons">pause</i></button>
+        <button id="reset"><i class="material-icons">replay</i></button>
+        <button id="download"><i class="material-icons">download</i></button>
       </div>
 
       <div class="stats">
@@ -119,7 +120,6 @@
 
     <!-- RIGHT: Canvas -->
     <section class="card right">
-      <header><h1>Arena</h1></header>
       <canvas id="cv" width="820" height="820"></canvas>
     </section>
   </div>
@@ -177,7 +177,7 @@ const state = {
   playing: false,
   paused: false,
   t: 0,
-  Tfinal: 20.0,
+  Tfinal: 10.0,
   insideTime: 0,
   bestScore: 0,
   logs: [], // {name, csv}
@@ -238,7 +238,7 @@ function draw(){
   ctx.fillStyle = inside ? "#22c55e" : "#ef4444";
   ctx.beginPath();
   ctx.moveTo(0,0);
-  ctx.arc(0,0,R+massR*1.1, thRef-hw - Math.PI/2, thRef+hw - Math.PI/2, false); // rotate so 0 rad points downwards visually
+  ctx.arc(0,0,R, thRef-hw + Math.PI/2, thRef+hw + Math.PI/2, false); // rotate so 0 rad points downwards visually
   ctx.closePath(); ctx.fill();
   ctx.globalAlpha = 1;
 
@@ -311,11 +311,11 @@ function updateTorque(){
   const nearBottom = Math.abs(state.env.th) < deg2rad(70); // "far from top" ~ near bottom region
 
   if(left){
-    if(nearBottom) state.u =  state.umax; // full power
-    else delta -= state.uStep;            // gentle push
+    if(nearBottom) state.u =  -state.umax; // full power
+    else delta += state.uStep;            // gentle push
   } else if(right){
-    if(nearBottom) state.u = -state.umax;
-    else delta += state.uStep;
+    if(nearBottom) state.u = state.umax;
+    else delta -= state.uStep;
   } else {
     state.u = 0.0; // no keys -> neutral (then auto-zero may smooth residual)
   }
@@ -366,7 +366,7 @@ function loop(ts){
 
   draw();
 
-  // Stop at 20s
+  // Stop at 10s
   if(state.t >= state.Tfinal){
     endRun();
   }
@@ -409,7 +409,7 @@ function endRun(){
 function togglePause(){
   if(!state.playing) return;
   state.paused = !state.paused;
-  el.pause.textContent = state.paused ? "Resume" : "Pause";
+  el.pause.innerHTML = state.paused ? "<i class=\"material-icons\">play_arrow</i>" : "<i class=\"material-icons\">pause</i>";
   if(!state.paused) { lastTime=null; rafId=requestAnimationFrame(loop); }
 }
 function resetAll(){
@@ -417,7 +417,7 @@ function resetAll(){
   state.env = new DiskEnv({dt: state.dt, umax: state.umax});
   state.t=0; state.insideTime=0; state.u=0; lastTime=null;
   el.time.textContent="0.00 s"; el.inside.textContent="0.00 s"; el.score.textContent="0.0%";
-  el.pause.textContent="Pause"; el.start.disabled=false; el.pause.disabled=false;
+  el.pause.innerHTML="<i class=\"material-icons\">pause</i>"; el.start.disabled=false; el.pause.disabled=false;
   el.status.textContent="Reset. Ready.";
   draw();
 }
